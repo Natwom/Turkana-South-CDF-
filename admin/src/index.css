@@ -1,0 +1,8 @@
+@tailwind base; @tailwind components; @tailwind utilities;
+body { @apply bg-gray-100 text-gray-800; }
+.btn-primary { @apply bg-brand text-white px-4 py-2 rounded-lg font-semibold hover:bg-brand-dark transition disabled:opacity-50 text-sm; }
+.btn-outline { @apply border border-gray-300 bg-white px-4 py-2 rounded-lg font-semibold hover:bg-gray-50 transition text-sm; }
+.input { @apply w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand outline-none; }
+.label { @apply block text-xs font-semibold mb-1 text-gray-600 uppercase tracking-wide; }
+.card { @apply bg-white rounded-xl shadow-sm border border-gray-100 p-5; }
+.badge { @apply px-2.5 py-1 rounded-full text-xs font-bold; }
