@@ -159,29 +159,33 @@ def delete_application(app_id: int, db: Session = Depends(get_db),
     app_number = app.application_number
     applicant_name = app.applicant.full_name if app.applicant else "Unknown"
 
-    # Remove uploaded files from disk before deleting DB records
     for d in app.documents:
-        full_path = os.path.join(settings.STORAGE_DIR, d.file_path)
-        if os.path.exists(full_path):
-            try:
-                os.remove(full_path)
-            except OSError:
-                pass
-
-    # Also try to remove the application's storage folder if now empty
-    folder = os.path.join(settings.STORAGE_DIR, app_number)
-    if os.path.isdir(folder):
         try:
+            full_path = os.path.join(settings.STORAGE_DIR, d.file_path)
+            if os.path.exists(full_path):
+                os.remove(full_path)
+        except Exception:
+            pass
+
+    try:
+        folder = os.path.join(settings.STORAGE_DIR, app_number)
+        if os.path.isdir(folder) and not os.listdir(folder):
             os.rmdir(folder)
-        except OSError:
-            pass  # not empty or in use — leave it
+    except Exception:
+        pass
 
-    db.delete(app)  # cascades to ApplicantDetail, FamilyDetail, Guardian, Sibling,
-                    # EducationFunding, Document, StatusHistory, Allocation, CorrectionRequest
-    db.commit()
+    try:
+        db.delete(app)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Failed to delete application: {str(e)}")
 
-    log_action(admin.username, "Application DELETED", app_number,
-               f"Applicant: {applicant_name}")
+    try:
+        log_action(admin.username, "Application DELETED", app_number,
+                   f"Applicant: {applicant_name}")
+    except Exception:
+        pass
     return {"message": f"Application {app_number} has been permanently deleted."}
 
 # ---------- ALLOCATIONS ----------
