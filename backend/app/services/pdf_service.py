@@ -1,11 +1,20 @@
+import os
 from io import BytesIO
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
 
 styles = getSampleStyleSheet()
+
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "..", "assets", "ngcdf-logo.png")
+
+letterhead_title = ParagraphStyle("LetterheadTitle", parent=styles["Normal"],
+    fontSize=11, leading=14, fontName="Helvetica-Bold", alignment=TA_CENTER)
+letterhead_sub = ParagraphStyle("LetterheadSub", parent=styles["Normal"],
+    fontSize=9, leading=12, alignment=TA_CENTER)
 
 def _row(label, value):
     return [Paragraph(f"<b>{label}</b>", styles["Normal"]),
@@ -22,16 +31,47 @@ DOC_TYPE_LABELS = {
     "signed_form": "Signed/stamped application form",
 }
 
+def _letterhead(S):
+    logo_cell = ""
+    if os.path.exists(LOGO_PATH):
+        logo_cell = Image(LOGO_PATH, width=2.2*cm, height=2.2*cm)
+    text_cell = [
+        Paragraph("NATIONAL GOVERNMENT CONSTITUENCIES DEVELOPMENT FUND BOARD", letterhead_title),
+        Paragraph("TURKANA SOUTH CONSTITUENCY", letterhead_title),
+        Spacer(1, 4),
+        Paragraph("Turkana South NGCDFC Office, located next to DCC Office, Lokichar<br/>"
+                   "Next to KPLC Power Station, Lokichar<br/>"
+                   "P.O Box 267 – 30500, Lodwar, Kenya<br/>"
+                   "Tel/Cell: 0770 072 945 &nbsp;|&nbsp; Email: ngcdfturkanasouth@ngcdf.go.ke<br/>"
+                   "Website: www.ngcdf.go.ke", letterhead_sub),
+    ]
+    if logo_cell:
+        header_table = Table([[logo_cell, text_cell]], colWidths=[2.8*cm, 13.2*cm])
+        header_table.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (0, 0), (0, 0), "CENTER"),
+        ]))
+        S.append(header_table)
+    else:
+        for p in text_cell:
+            S.append(p)
+    S.append(Spacer(1, 6))
+    line = Table([[""]], colWidths=[16*cm], rowHeights=[1])
+    line.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, -1), 1.2, colors.HexColor("#1a5c2e"))]))
+    S.append(line)
+    S.append(Spacer(1, 10))
+
 def generate_application_pdf(app) -> bytes:
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.6*cm, rightMargin=1.6*cm,
-                            topMargin=1.6*cm, bottomMargin=1.6*cm)
+                            topMargin=1.4*cm, bottomMargin=1.6*cm)
     S = []
     a = app.applicant
-    S.append(Paragraph("REPUBLIC OF KENYA", styles["Normal"]))
-    S.append(Paragraph("NATIONAL GOVERNMENT CONSTITUENCY DEVELOPMENT FUND", styles["Normal"]))
-    S.append(Paragraph("TURKANA SOUTH CONSTITUENCY — BURSARY APPLICATION FORM", styles["Title"]))
-    S.append(Spacer(1, 12))
+
+    _letterhead(S)
+
+    S.append(Paragraph("BURSARY APPLICATION FORM", styles["Title"]))
+    S.append(Spacer(1, 8))
     S.append(Paragraph(f"Application Number: <b>{app.application_number}</b>   "
                        f"Status: {app.status}", styles["Normal"]))
     S.append(Spacer(1, 10))
@@ -114,7 +154,7 @@ def generate_application_pdf(app) -> bytes:
     S.append(Paragraph(f"AMOUNT APPLYING FOR: KSh {app.amount_requested or 0:,.2f}", styles["Heading4"]))
     S.append(Spacer(1, 18))
 
-    # PART E — DOCUMENTS SUBMITTED (NEW)
+    # PART E — DOCUMENTS SUBMITTED
     S.append(Paragraph("PART E: DOCUMENTS SUBMITTED", styles["Heading3"]))
     if app.documents:
         data = [["Document Type", "File Name", "Uploaded On"]]
