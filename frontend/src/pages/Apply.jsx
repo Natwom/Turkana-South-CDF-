@@ -45,13 +45,22 @@ export default function Apply() {
         ...form,
         funding_period_id: 1,
         amount_requested: form.amount_requested ? Number(form.amount_requested) : null,
-        applicant: { ...form.applicant, dob: form.applicant.dob || null }
+        applicant: { ...form.applicant, dob: form.applicant.dob || null },
+        siblings: form.siblings.map(s => ({
+          ...s,
+          total_fees: s.total_fees ? Number(s.total_fees) : 0,
+          outstanding_balance: s.outstanding_balance ? Number(s.outstanding_balance) : 0
+        }))
       }
       const { data } = await startApplication(payload)
       setCreds({ application_number: data.application_number, access_code: data.access_code })
       return data
     } catch (e) {
-      setError(e.response?.data?.detail?.map?.(d => d.msg).join(', ') || e.response?.data?.detail || 'Save failed')
+      const detail = e.response?.data?.detail
+      const msg = Array.isArray(detail)
+        ? detail.map(d => `${d.loc?.slice(-1)[0] || 'field'}: ${d.msg}`).join('; ')
+        : (detail || 'Save failed. Please try again.')
+      setError(msg)
       throw e
     } finally { setBusy(false) }
   }

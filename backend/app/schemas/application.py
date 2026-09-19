@@ -1,7 +1,17 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+
+def _to_decimal(v):
+    if v is None or v == "":
+        return Decimal("0")
+    if isinstance(v, Decimal):
+        return v
+    try:
+        return Decimal(str(v))
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
 
 class GuardianIn(BaseModel):
     name: Optional[str] = None
@@ -13,20 +23,25 @@ class GuardianIn(BaseModel):
     telephone: Optional[str] = None
 
 class SiblingIn(BaseModel):
-    name: str
+    name: str = ""
     relationship: Optional[str] = None
     school: Optional[str] = None
     class_level: Optional[str] = None
     total_fees: Decimal = Decimal("0")
     outstanding_balance: Decimal = Decimal("0")
 
+    @field_validator("total_fees", "outstanding_balance", mode="before")
+    @classmethod
+    def coerce_decimal(cls, v):
+        return _to_decimal(v)
+
 class FundingHistoryIn(BaseModel):
-    level: str                                  # Secondary/College/University
+    level: str = ""                              # Secondary/College/University
     funding_source: Optional[str] = None
     other_source: Optional[str] = None
 
 class ApplicantIn(BaseModel):
-    full_name: str
+    full_name: str = ""
     reg_number: Optional[str] = None
     id_number: Optional[str] = None
     nemis_number: Optional[str] = None
@@ -50,6 +65,13 @@ class ApplicantIn(BaseModel):
     class_year: Optional[str] = None
     expected_completion: Optional[str] = None
 
+    @field_validator("dob", mode="before")
+    @classmethod
+    def blank_date_to_none(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
+
 class FamilyIn(BaseModel):
     reason_for_bursary: Optional[str] = None
     applicant_disability: bool = False
@@ -62,8 +84,8 @@ class FamilyIn(BaseModel):
     mother: Optional[GuardianIn] = None
 
 class ApplicationCreate(BaseModel):
-    category: str
-    funding_period_id: int
+    category: str = ""
+    funding_period_id: int = 1
     amount_requested: Optional[Decimal] = None
     family_status: Optional[str] = None
     family_status_other: Optional[str] = None
@@ -72,11 +94,11 @@ class ApplicationCreate(BaseModel):
     siblings: List[SiblingIn] = []
     funding_history: List[FundingHistoryIn] = []
 
-    @field_validator("amount_requested")
+    @field_validator("amount_requested", mode="before")
     @classmethod
-    def amount_positive(cls, v):
-        if v is not None and v <= 0:
-            raise ValueError("Amount must be a positive value")
+    def blank_amount_to_none(cls, v):
+        if v == "" or v is None:
+            return None
         return v
 
 class AccessRequest(BaseModel):
