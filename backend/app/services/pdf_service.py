@@ -6,6 +6,8 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.utils import ImageReader
+from ..core.config import settings
 
 styles = getSampleStyleSheet()
 
@@ -30,6 +32,10 @@ DOC_TYPE_LABELS = {
     "birth_certificate": "Birth certificate",
     "signed_form": "Signed/stamped application form",
 }
+
+IMAGE_EXTENSIONS = {"jpg", "jpeg", "png"}
+MAX_IMG_WIDTH = 12 * cm
+MAX_IMG_HEIGHT = 9 * cm
 
 def _letterhead(S):
     logo_cell = ""
@@ -60,6 +66,22 @@ def _letterhead(S):
     line.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, -1), 1.2, colors.HexColor("#1a5c2e"))]))
     S.append(line)
     S.append(Spacer(1, 10))
+
+def _scaled_image(path, max_w, max_h):
+    """Return a ReportLab Image scaled to fit within max_w x max_h, preserving aspect ratio."""
+    try:
+        reader = ImageReader(path)
+        iw, ih = reader.getSize()
+    except Exception:
+        return None
+    if iw <= 0 or ih <= 0:
+        return None
+    scale = min(max_w / iw, max_h / ih, 1.0)
+    w, h = iw * scale, ih * scale
+    try:
+        return Image(path, width=w, height=h)
+    except Exception:
+        return None
 
 def generate_application_pdf(app) -> bytes:
     buf = BytesIO()
@@ -157,6 +179,7 @@ def generate_application_pdf(app) -> bytes:
     # PART E — DOCUMENTS SUBMITTED
     S.append(Paragraph("PART E: DOCUMENTS SUBMITTED", styles["Heading3"]))
     if app.documents:
+        # Summary table first, listing every document
         data = [["Document Type", "File Name", "Uploaded On"]]
         for d in app.documents:
             label = DOC_TYPE_LABELS.get(d.doc_type, d.doc_type)
@@ -169,9 +192,28 @@ def generate_application_pdf(app) -> bytes:
                                ("FONTSIZE", (0,0), (-1,-1), 8),
                                ("VALIGN", (0,0), (-1,-1), "TOP")]))
         S.append(t)
+        S.append(Spacer(1, 14))
+
+        # Then embed each image document as an actual picture
+        for d in app.documents:
+            ext = (d.file_type or "").lower().lstrip(".")
+            if ext not in IMAGE_EXTENSIONS:
+                continue
+            full_path = os.path.join(settings.STORAGE_DIR, d.file_path)
+            if not os.path.exists(full_path):
+                continue
+            label = DOC_TYPE_LABELS.get(d.doc_type, d.doc_type)
+            if d.is_signed_form:
+                label += " (SIGNED)"
+            img = _scaled_image(full_path, MAX_IMG_WIDTH, MAX_IMG_HEIGHT)
+            if img:
+                S.append(Paragraph(f"<b>{label}</b> — {d.original_name or ''}", styles["Normal"]))
+                S.append(Spacer(1, 4))
+                S.append(img)
+                S.append(Spacer(1, 14))
     else:
         S.append(Paragraph("No documents have been uploaded yet.", styles["Normal"]))
-    S.append(Spacer(1, 18))
+    S.append(Spacer(1, 8))
 
     # DECLARATION
     S.append(Paragraph("DECLARATION (Student/Parent/Guardian)", styles["Heading3"]))
