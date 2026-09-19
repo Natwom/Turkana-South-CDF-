@@ -42,6 +42,11 @@ def seed():
     finally:
         db.close()
 
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "Turkana South NG-CDF Bursary API",
+            "version": app.version, "docs": "/docs"}
+
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
