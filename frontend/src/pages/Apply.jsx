@@ -4,6 +4,8 @@ import ProgressBar from '../components/ProgressBar'
 import { Input, Select, YesNo } from '../components/Field'
 import { startApplication, uploadDocument, submitApplication } from '../services/api'
 
+const WARDS = ['Lokichar', 'Lochwa', 'Kalapata', 'Katilu', 'Kaputir', 'Lobokat']
+
 const empty = {
   category: '', amount_requested: '', family_status: '', family_status_other: '',
   applicant: { full_name: '', reg_number: '', id_number: '', nemis_number: '', telephone: '',
@@ -25,6 +27,7 @@ export default function Apply() {
   const [creds, setCreds] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [agreed, setAgreed] = useState(false)
   const navigate = useNavigate()
 
   const set = (path, value) => {
@@ -72,6 +75,7 @@ export default function Apply() {
   }
 
   const handleSubmit = async () => {
+    if (!agreed) { setError('You must agree to the terms and conditions before submitting.'); return }
     setBusy(true); setError('')
     try {
       let c = creds
@@ -118,7 +122,7 @@ export default function Apply() {
       <Input label="Date of Birth" type="date" value={form.applicant.dob} onChange={e => set('applicant.dob', e.target.value)} />
       <Input label="Place of Birth/Residence" value={form.applicant.place_of_birth} onChange={e => set('applicant.place_of_birth', e.target.value)} />
       <Input label="Constituency" value={form.applicant.constituency} onChange={e => set('applicant.constituency', e.target.value)} />
-      <Input label="Ward *" value={form.applicant.ward} onChange={e => set('applicant.ward', e.target.value)} />
+      <Select label="Ward *" options={WARDS} value={form.applicant.ward} onChange={e => set('applicant.ward', e.target.value)} />
       <Input label="Location" value={form.applicant.location} onChange={e => set('applicant.location', e.target.value)} />
       <Input label="Sub-Location" value={form.applicant.sub_location} onChange={e => set('applicant.sub_location', e.target.value)} />
       <Input label="Village" value={form.applicant.village} onChange={e => set('applicant.village', e.target.value)} />
@@ -244,6 +248,21 @@ export default function Apply() {
         <p><strong>Amount Requested:</strong> KSh {Number(form.amount_requested || 0).toLocaleString()}</p>
         <p><strong>Documents attached:</strong> {Object.values(files).filter(Boolean).length}</p>
       </div>
+      <div className="card !p-4 bg-gray-50 border-gray-200">
+        <h4 className="font-bold text-brand mb-2">Terms and Conditions</h4>
+        <div className="text-xs text-gray-600 max-h-40 overflow-y-auto space-y-2 pr-2">
+          <p>By submitting this application, I confirm that all information provided is true, accurate and complete to the best of my knowledge.</p>
+          <p>I understand that providing false, misleading or incomplete information may lead to disqualification of this application, revocation of any bursary already awarded, and possible legal action.</p>
+          <p>I understand that the Turkana South NG-CDF Bursary Committee reserves the right to verify any information provided, including through physical verification at my institution or home area.</p>
+          <p>I understand that submission of this application does not guarantee an award, and that bursary allocations are subject to availability of funds and the Committee's assessment of need.</p>
+          <p>I consent to the collection and processing of my personal data and that of my family, solely for the purpose of assessing and administering this bursary application, in line with applicable data protection laws.</p>
+          <p>I understand that any funds allocated will be disbursed directly to my institution's official account, and not to me or my guardian personally.</p>
+        </div>
+        <label className="flex items-start gap-2 mt-3 text-sm cursor-pointer">
+          <input type="checkbox" className="mt-1" checked={agreed} onChange={e => { setAgreed(e.target.checked); setError('') }} />
+          <span>I have read and agree to the terms and conditions above, and confirm that the information provided in this application is true and correct.</span>
+        </label>
+      </div>
     </div>
   ]
 
@@ -262,7 +281,7 @@ export default function Apply() {
             {step < steps.length - 1 ? (
               <button type="button" className="btn-primary" onClick={() => setStep(step + 1)}>Next</button>
             ) : (
-              <button type="button" className="btn-primary" disabled={busy || !form.applicant.full_name || !form.amount_requested}
+              <button type="button" className="btn-primary" disabled={busy || !form.applicant.full_name || !form.amount_requested || !agreed}
                 onClick={handleSubmit}>
                 {busy ? 'Submitting…' : 'Submit Application'}
               </button>
