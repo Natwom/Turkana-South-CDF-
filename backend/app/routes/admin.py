@@ -153,40 +153,45 @@ def add_note(app_id: int, payload: NoteIn, db: Session = Depends(get_db),
 @router.delete("/applications/{app_id}")
 def delete_application(app_id: int, db: Session = Depends(get_db),
                        admin=Depends(require_roles("SUPER_ADMIN"))):
-    app = db.get(Application, app_id)
-    if not app: raise HTTPException(404, "Application not found.")
+    try:
+        app = db.get(Application, app_id)
+        if not app:
+            raise HTTPException(404, "Application not found.")
 
-    app_number = app.application_number
-    applicant_name = app.applicant.full_name if app.applicant else "Unknown"
+        app_number = app.application_number
+        applicant_name = app.applicant.full_name if app.applicant else "Unknown"
 
-    for d in app.documents:
+        for d in app.documents:
+            try:
+                full_path = os.path.join(settings.STORAGE_DIR, d.file_path)
+                if os.path.exists(full_path):
+                    os.remove(full_path)
+            except Exception:
+                pass
+
         try:
-            full_path = os.path.join(settings.STORAGE_DIR, d.file_path)
-            if os.path.exists(full_path):
-                os.remove(full_path)
+            folder = os.path.join(settings.STORAGE_DIR, app_number)
+            if os.path.isdir(folder) and not os.listdir(folder):
+                os.rmdir(folder)
         except Exception:
             pass
 
-    try:
-        folder = os.path.join(settings.STORAGE_DIR, app_number)
-        if os.path.isdir(folder) and not os.listdir(folder):
-            os.rmdir(folder)
-    except Exception:
-        pass
-
-    try:
         db.delete(app)
         db.commit()
+
+        try:
+            log_action(admin.username, "Application DELETED", app_number,
+                       f"Applicant: {applicant_name}")
+        except Exception:
+            pass
+
+        return {"message": f"Application {app_number} has been permanently deleted."}
+
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(500, f"Failed to delete application: {str(e)}")
-
-    try:
-        log_action(admin.username, "Application DELETED", app_number,
-                   f"Applicant: {applicant_name}")
-    except Exception:
-        pass
-    return {"message": f"Application {app_number} has been permanently deleted."}
+        raise HTTPException(500, f"Delete failed: {type(e).__name__}: {str(e)}")
 
 # ---------- ALLOCATIONS ----------
 @router.post("/applications/{app_id}/allocation")
