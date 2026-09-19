@@ -11,6 +11,17 @@ def _row(label, value):
     return [Paragraph(f"<b>{label}</b>", styles["Normal"]),
             Paragraph(str(value or "—"), styles["Normal"])]
 
+DOC_TYPE_LABELS = {
+    "id_card": "Copy of ID (student/parent)",
+    "academic": "Academic certificates / transcript",
+    "admission_letter": "Admission letter",
+    "fees_structure": "Fees structure",
+    "fee_balance": "Fee balance statement",
+    "death_certificate": "Death certificate",
+    "birth_certificate": "Birth certificate",
+    "signed_form": "Signed/stamped application form",
+}
+
 def generate_application_pdf(app) -> bytes:
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.6*cm, rightMargin=1.6*cm,
@@ -101,6 +112,25 @@ def generate_application_pdf(app) -> bytes:
         S.append(Paragraph(f"{h.level}: Source — {h.funding_source or '—'}; Other — {h.other_source or '—'}", styles["Normal"]))
     S.append(Spacer(1, 8))
     S.append(Paragraph(f"AMOUNT APPLYING FOR: KSh {app.amount_requested or 0:,.2f}", styles["Heading4"]))
+    S.append(Spacer(1, 18))
+
+    # PART E — DOCUMENTS SUBMITTED (NEW)
+    S.append(Paragraph("PART E: DOCUMENTS SUBMITTED", styles["Heading3"]))
+    if app.documents:
+        data = [["Document Type", "File Name", "Uploaded On"]]
+        for d in app.documents:
+            label = DOC_TYPE_LABELS.get(d.doc_type, d.doc_type)
+            if d.is_signed_form:
+                label += " (SIGNED)"
+            data.append([label, d.original_name or "—", str(d.uploaded_at)[:16] if d.uploaded_at else "—"])
+        t = Table(data, repeatRows=1, colWidths=[6*cm, 7*cm, 3.5*cm])
+        t.setStyle(TableStyle([("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+                               ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+                               ("FONTSIZE", (0,0), (-1,-1), 8),
+                               ("VALIGN", (0,0), (-1,-1), "TOP")]))
+        S.append(t)
+    else:
+        S.append(Paragraph("No documents have been uploaded yet.", styles["Normal"]))
     S.append(Spacer(1, 18))
 
     # DECLARATION
