@@ -1,6 +1,8 @@
 import axios from 'axios'
 
-const api = axios.create({ baseURL: '/api' })
+const API_URL = import.meta.env.VITE_API_URL || '/api'
+
+const api = axios.create({ baseURL: API_URL })
 
 export const startApplication = (data) => api.post('/applications', data)
 export const accessApplication = (application_number, access_code) =>
@@ -20,6 +22,6 @@ export const uploadSignedForm = (application_number, access_code, file) => {
   return api.post(`/applications/${application_number}/signed-form`, fd)
 }
 export const getPdfUrl = (application_number, access_code) =>
-  `/api/applications/${application_number}/pdf?access_code=${access_code}`
+  `${API_URL}/applications/${application_number}/pdf?access_code=${access_code}`
 
 export default api
