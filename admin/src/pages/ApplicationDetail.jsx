@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import api from '../services/api'
+import api, { downloadFile } from '../services/api'
 
 const CHECKLIST = ['Application information checked', 'Academic documents checked',
   'Admission letter checked', 'Fee structure checked', 'Fee balance checked',
@@ -114,10 +114,10 @@ export default function ApplicationDetail() {
           {app.documents?.map(d => (
             <div key={d.id} className="flex items-center justify-between text-sm py-1.5 border-b">
               <span>{d.original_name} <span className="text-xs text-gray-400">({d.doc_type}{d.is_signed_form ? ', SIGNED' : ''})</span></span>
-              <a className="text-brand font-semibold" href={`/api/documents/${d.id}`} target="_blank" rel="noreferrer">Download</a>
+              <button className="text-brand font-semibold" onClick={() => downloadFile(`/documents/${d.id}`, d.original_name)}>Download</button>
             </div>
           ))}
-          <a className="btn-outline mt-3 inline-block" href={`/api/admin/applications/${id}/pdf`} target="_blank" rel="noreferrer">Download Generated PDF</a>
+          <button className="btn-outline mt-3 inline-block" onClick={() => downloadFile(`/admin/applications/${id}/pdf`, `${app.application_number}.pdf`)}>Download Generated PDF</button>
         </>)}
 
         {sec('Admin Actions', <div className="space-y-4">

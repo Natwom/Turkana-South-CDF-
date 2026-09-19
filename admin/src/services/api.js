@@ -15,4 +15,16 @@ api.interceptors.response.use(r => r, err => {
   return Promise.reject(err)
 })
 
+export const downloadFile = async (path, filename) => {
+  const res = await api.get(path, { responseType: 'blob' })
+  const url = window.URL.createObjectURL(new Blob([res.data]))
+  const link = document.createElement('a')
+  link.href = url
+  link.setAttribute('download', filename || 'download')
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.URL.revokeObjectURL(url)
+}
+
 export default api
