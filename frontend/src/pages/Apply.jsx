@@ -127,7 +127,7 @@ export default function Apply() {
       <Input label="School Paybill Number" placeholder="e.g. 123456" value={form.applicant.school_paybill} onChange={e => set('applicant.school_paybill', e.target.value)} />
       <Input label="School Bank/M-Pesa Account Number" placeholder="Account number to send fees to" value={form.applicant.school_account_number} onChange={e => set('applicant.school_account_number', e.target.value)} />
       <Input label="Campus/Branch" value={form.applicant.campus} onChange={e => set('applicant.campus', e.target.value)} />
-      <Select label="Level of Study" options={['Degree', 'Diploma', 'Certificate']} value={form.applicant.level_of_study} onChange={e => set('applicant.level_of_study', e.target.value)} />
+      <Select label="Level of Study" options={['Secondary', 'Degree', 'Diploma', 'Certificate']} value={form.applicant.level_of_study} onChange={e => set('applicant.level_of_study', e.target.value)} />
       <Input label="Course of Study" value={form.applicant.course} onChange={e => set('applicant.course', e.target.value)} />
       <Select label="Mode of Study" options={['Regular', 'Parallel', 'Boarding', 'Day']} value={form.applicant.mode_of_study} onChange={e => set('applicant.mode_of_study', e.target.value)} />
       <Input label="Class/Year of Study" value={form.applicant.class_year} onChange={e => set('applicant.class_year', e.target.value)} />
