@@ -1,9 +1,11 @@
+import os
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from fastapi.responses import Response
 from ..database import get_db
+from ..core.config import settings
 from ..core.security import (verify_password, create_token, get_current_admin, require_roles, hash_password)
 from ..schemas.admin import (AdminLogin, StatusUpdate, CorrectionRequestIn,
                              VerificationIn, AllocationIn, DisburseIn, NoteIn)
@@ -146,6 +148,41 @@ def add_note(app_id: int, payload: NoteIn, db: Session = Depends(get_db),
                      is_student_visible=payload.is_student_visible, created_by=admin.username))
     db.commit()
     return {"message": "Note added."}
+
+# ---------- DELETE (Super Admin only) ----------
+@router.delete("/applications/{app_id}")
+def delete_application(app_id: int, db: Session = Depends(get_db),
+                       admin=Depends(require_roles("SUPER_ADMIN"))):
+    app = db.get(Application, app_id)
+    if not app: raise HTTPException(404, "Application not found.")
+
+    app_number = app.application_number
+    applicant_name = app.applicant.full_name if app.applicant else "Unknown"
+
+    # Remove uploaded files from disk before deleting DB records
+    for d in app.documents:
+        full_path = os.path.join(settings.STORAGE_DIR, d.file_path)
+        if os.path.exists(full_path):
+            try:
+                os.remove(full_path)
+            except OSError:
+                pass
+
+    # Also try to remove the application's storage folder if now empty
+    folder = os.path.join(settings.STORAGE_DIR, app_number)
+    if os.path.isdir(folder):
+        try:
+            os.rmdir(folder)
+        except OSError:
+            pass  # not empty or in use — leave it
+
+    db.delete(app)  # cascades to ApplicantDetail, FamilyDetail, Guardian, Sibling,
+                    # EducationFunding, Document, StatusHistory, Allocation, CorrectionRequest
+    db.commit()
+
+    log_action(admin.username, "Application DELETED", app_number,
+               f"Applicant: {applicant_name}")
+    return {"message": f"Application {app_number} has been permanently deleted."}
 
 # ---------- ALLOCATIONS ----------
 @router.post("/applications/{app_id}/allocation")

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import api, { downloadFile } from '../services/api'
+import { useAuth } from '../context/AuthContext'
 
 const CHECKLIST = ['Application information checked', 'Academic documents checked',
   'Admission letter checked', 'Fee structure checked', 'Fee balance checked',
@@ -9,6 +10,7 @@ const CHECKLIST = ['Application information checked', 'Academic documents checke
 export default function ApplicationDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [app, setApp] = useState(null)
   const [checks, setChecks] = useState([])
   const [rejectReason, setRejectReason] = useState('')
@@ -16,6 +18,9 @@ export default function ApplicationDetail() {
   const [note, setNote] = useState('')
   const [alloc, setAlloc] = useState('')
   const [msg, setMsg] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmText, setConfirmText] = useState('')
+  const [deleting, setDeleting] = useState(false)
 
   const load = () => api.get(`/admin/applications/${id}`).then(r => setApp(r.data))
   useEffect(() => { load() }, [id])
@@ -31,7 +36,13 @@ export default function ApplicationDetail() {
     correct: () => api.post(`/admin/applications/${id}/correction`, { message: correction }).then(refresh).catch(err),
     addNote: () => api.post(`/admin/applications/${id}/notes`, { note }).then(() => { setNote(''); setMsg('Note added'); load() }).catch(err),
     allocate: () => api.post(`/admin/applications/${id}/allocation`, { amount: Number(alloc) }).then(refresh).catch(err),
-    disburse: () => api.post(`/admin/applications/${id}/disburse`, {}).then(refresh).catch(err)
+    disburse: () => api.post(`/admin/applications/${id}/disburse`, {}).then(refresh).catch(err),
+    delete: () => {
+      setDeleting(true)
+      api.delete(`/admin/applications/${id}`)
+        .then(() => navigate('/applications'))
+        .catch(e => { setMsg(e.response?.data?.detail || 'Delete failed'); setDeleting(false) })
+    }
   }
 
   const sec = (title, children) => (
@@ -166,6 +177,49 @@ export default function ApplicationDetail() {
             <button className="btn-outline" onClick={act.addNote}>Add</button>
           </div>
         </div>)}
+
+        {user?.role === 'SUPER_ADMIN' && (
+          <div className="card border-red-300 bg-red-50">
+            <h3 className="font-bold text-red-700 mb-3">Danger Zone — Super Admin Only</h3>
+            {!confirmDelete ? (
+              <button className="btn-primary !bg-red-600" onClick={() => setConfirmDelete(true)}>
+                Delete This Application
+              </button>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-sm text-red-800">
+                  This will <strong>permanently delete</strong> application <strong>{app.application_number}</strong> ({app.applicant?.full_name}),
+                  including all uploaded documents, family details, status history and allocation records. This cannot be undone.
+                </p>
+                <p className="text-sm text-red-800">
+                  Type the application number <strong>{app.application_number}</strong> below to confirm:
+                </p>
+                <input
+                  className="input border-red-300"
+                  value={confirmText}
+                  onChange={e => setConfirmText(e.target.value)}
+                  placeholder={app.application_number}
+                />
+                <div className="flex gap-2">
+                  <button
+                    className="btn-primary !bg-red-700"
+                    disabled={confirmText !== app.application_number || deleting}
+                    onClick={act.delete}
+                  >
+                    {deleting ? 'Deleting…' : 'Confirm Permanent Delete'}
+                  </button>
+                  <button
+                    className="btn-outline"
+                    onClick={() => { setConfirmDelete(false); setConfirmText('') }}
+                    disabled={deleting}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
