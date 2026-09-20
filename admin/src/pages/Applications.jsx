@@ -24,6 +24,7 @@ const COLUMNS = [
 ]
 
 const PAGE_SIZE = 25
+const FROZEN_COL_WIDTH = 130 // px — width reserved for the frozen "App Number" column
 
 function ColumnFilterButton({ col, values, active, onChange }) {
   const [open, setOpen] = useState(false)
@@ -62,7 +63,7 @@ function ColumnFilterButton({ col, values, active, onChange }) {
         title="Filter"
       >▾</button>
       {open && (
-        <div className="absolute z-20 top-6 left-0 bg-white border border-gray-300 rounded-lg shadow-xl w-56 p-3 text-xs">
+        <div className="absolute z-30 top-6 left-0 bg-white border border-gray-300 rounded-lg shadow-xl w-56 p-3 text-xs">
           {col.type === 'list' ? (
             <>
               <div className="flex justify-between mb-2">
@@ -255,50 +256,82 @@ export default function Applications() {
         )}
       </div>
 
-      <div className="card !p-0 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left select-none sticky top-0 z-10">
-            <tr>
-              {COLUMNS.map(col => (
-                <th key={col.key} className="px-4 py-3 font-semibold whitespace-nowrap">
-                  <span className="cursor-pointer hover:text-brand" onClick={() => toggleSort(col.key)}>
-                    {col.label}
-                    {sortKey === col.key && (sortDir === 'asc' ? ' ▲' : ' ▼')}
+      {/* Freeze-panes table: header row frozen (sticky top) + App Number column frozen (sticky left) */}
+      <div className="card !p-0">
+        <div className="overflow-auto rounded-xl" style={{ maxHeight: '70vh' }}>
+          <table className="w-full text-sm border-separate border-spacing-0">
+            <thead>
+              <tr>
+                <th
+                  className="px-4 py-3 font-semibold whitespace-nowrap text-left bg-gray-100 sticky top-0 left-0 z-30 border-b border-r border-gray-200"
+                  style={{ minWidth: FROZEN_COL_WIDTH, width: FROZEN_COL_WIDTH }}
+                >
+                  <span className="cursor-pointer hover:text-brand" onClick={() => toggleSort('application_number')}>
+                    App Number
+                    {sortKey === 'application_number' && (sortDir === 'asc' ? ' ▲' : ' ▼')}
                   </span>
                   <ColumnFilterButton
-                    col={col}
-                    values={columnValues(col.key)}
-                    active={colFilters[col.key] || {}}
+                    col={COLUMNS[0]}
+                    values={columnValues('application_number')}
+                    active={colFilters['application_number'] || {}}
                     onChange={setColFilter}
                   />
                 </th>
-              ))}
-              <th className="px-4 py-3 font-semibold">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pageItems.map(a => (
-              <tr key={a.application_number} className="border-t hover:bg-gray-50">
-                <td className="px-4 py-3 font-mono text-xs">{a.application_number}</td>
-                <td className="px-4 py-3 font-medium">{a.applicant?.full_name}</td>
-                <td className="px-4 py-3">{a.applicant?.institution}</td>
-                <td className="px-4 py-3">{a.applicant?.ward}</td>
-                <td className="px-4 py-3">{Number(a.amount_requested || 0).toLocaleString()}</td>
-                <td className="px-4 py-3"><span className={`badge ${STATUS_COLORS[a.status] || 'bg-gray-100'}`}>{a.status}</span></td>
-                <td className="px-4 py-3 text-gray-500 text-xs">{a.status_history?.[0]?.created_at?.slice(0, 10)}</td>
-                <td className="px-4 py-3 whitespace-nowrap">
-                  <Link to={`/applications/${a.id}`} className="text-brand font-semibold hover:underline mr-3">View</Link>
-                  <button
-                    className="text-gray-500 hover:text-brand text-xs"
-                    onClick={() => downloadFile(`/admin/applications/${a.id}/pdf`, `${a.application_number}.pdf`)}
+                {COLUMNS.slice(1).map(col => (
+                  <th
+                    key={col.key}
+                    className="px-4 py-3 font-semibold whitespace-nowrap text-left bg-gray-50 sticky top-0 z-20 border-b border-gray-200"
                   >
-                    PDF
-                  </button>
-                </td>
+                    <span className="cursor-pointer hover:text-brand" onClick={() => toggleSort(col.key)}>
+                      {col.label}
+                      {sortKey === col.key && (sortDir === 'asc' ? ' ▲' : ' ▼')}
+                    </span>
+                    <ColumnFilterButton
+                      col={col}
+                      values={columnValues(col.key)}
+                      active={colFilters[col.key] || {}}
+                      onChange={setColFilter}
+                    />
+                  </th>
+                ))}
+                <th className="px-4 py-3 font-semibold whitespace-nowrap text-left bg-gray-50 sticky top-0 z-20 border-b border-gray-200">
+                  Actions
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {pageItems.map(a => (
+                <tr key={a.application_number} className="hover:bg-gray-50 group">
+                  <td
+                    className="px-4 py-3 font-mono text-xs bg-white sticky left-0 z-10 border-r border-b border-gray-100 group-hover:bg-gray-50"
+                    style={{ minWidth: FROZEN_COL_WIDTH, width: FROZEN_COL_WIDTH }}
+                  >
+                    {a.application_number}
+                  </td>
+                  <td className="px-4 py-3 font-medium border-b border-gray-100">{a.applicant?.full_name}</td>
+                  <td className="px-4 py-3 border-b border-gray-100">{a.applicant?.institution}</td>
+                  <td className="px-4 py-3 border-b border-gray-100">{a.applicant?.ward}</td>
+                  <td className="px-4 py-3 border-b border-gray-100">{Number(a.amount_requested || 0).toLocaleString()}</td>
+                  <td className="px-4 py-3 border-b border-gray-100">
+                    <span className={`badge ${STATUS_COLORS[a.status] || 'bg-gray-100'}`}>{a.status}</span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-500 text-xs border-b border-gray-100">
+                    {a.status_history?.[0]?.created_at?.slice(0, 10)}
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap border-b border-gray-100">
+                    <Link to={`/applications/${a.id}`} className="text-brand font-semibold hover:underline mr-3">View</Link>
+                    <button
+                      className="text-gray-500 hover:text-brand text-xs"
+                      onClick={() => downloadFile(`/admin/applications/${a.id}/pdf`, `${a.application_number}.pdf`)}
+                    >
+                      PDF
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         {!loading && sorted.length === 0 && <p className="text-center text-gray-500 py-10">No applications match the current filters.</p>}
       </div>
 
