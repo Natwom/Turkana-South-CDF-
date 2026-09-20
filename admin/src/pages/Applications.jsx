@@ -106,12 +106,18 @@ function ColumnFilterButton({ col, values, active, onChange }) {
 
 function Skeleton() {
   return (
-    <div className="space-y-4 animate-pulse">
-      <div className="h-8 w-40 bg-gray-200 rounded" />
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-20 bg-gray-200 rounded-xl" />)}
+    <div className="space-y-4">
+      <div className="flex flex-col items-center justify-center py-10">
+        <div className="w-10 h-10 border-4 border-brand/20 border-t-brand rounded-full animate-spin mb-4" />
+        <p className="text-gray-600 font-medium">Loading applications…</p>
+        <p className="text-xs text-gray-400 mt-1">Fetching the latest data from the server</p>
       </div>
-      <div className="h-96 bg-gray-200 rounded-2xl" />
+      <div className="animate-pulse space-y-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-20 bg-gray-200 rounded-xl" />)}
+        </div>
+        <div className="h-96 bg-gray-200 rounded-2xl" />
+      </div>
     </div>
   )
 }
