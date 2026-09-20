@@ -5,6 +5,8 @@ const API_URL = import.meta.env.VITE_API_URL || '/api'
 const api = axios.create({ baseURL: API_URL })
 
 export const startApplication = (data) => api.post('/applications', data)
+export const updateApplication = (application_number, access_code, data) =>
+  api.put(`/applications/${application_number}?access_code=${encodeURIComponent(access_code)}`, data)
 export const accessApplication = (application_number, access_code) =>
   api.post('/applications/access', { application_number, access_code })
 export const submitApplication = (application_number, access_code) => {

@@ -9,7 +9,7 @@ from ..schemas.application import ApplicationCreate, AccessRequest, ApplicationR
 from ..services.numbering import generate_unique_credentials
 from ..services.status import transition
 from ..services.pdf_service import generate_application_pdf
-from ..repositories.application_repo import build_application, to_public_dict
+from ..repositories.application_repo import build_application, update_application, to_public_dict
 from ..core.config import settings
 from ..middleware.rate_limit import limiter
 from ..middleware.audit import log_action
@@ -56,6 +56,18 @@ def create_application(payload: ApplicationCreate, request: Request, db: Session
     transition(db, app, "Draft", "System", "Application created (draft).")
     db.commit()
     log_action("PUBLIC", "Application created", app_no, ip=request.client.host if request else None)
+    return app
+
+@router.put("/{application_number}", response_model=ApplicationResponse)
+@limiter.limit("20/minute")
+def update_existing_application(application_number: str, payload: ApplicationCreate,
+                                access_code: str, request: Request, db: Session = Depends(get_db)):
+    app = get_by_credentials(db, application_number, access_code)
+    if app.status not in ("Draft", "Correction Required"):
+        raise HTTPException(400, f"Application can no longer be edited (status: {app.status}).")
+    app = update_application(db, app, payload)
+    log_action("PUBLIC", "Application draft updated", app.application_number,
+               ip=request.client.host if request else None)
     return app
 
 @router.post("/access")

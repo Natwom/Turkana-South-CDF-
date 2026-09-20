@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ProgressBar from '../components/ProgressBar'
 import { Input, Select, YesNo } from '../components/Field'
-import { startApplication, uploadDocument, submitApplication } from '../services/api'
+import { startApplication, updateApplication, uploadDocument, submitApplication } from '../services/api'
 
 const WARDS = ['Lokichar', 'Lochwa', 'Kalapata', 'Katilu', 'Kaputir', 'Lobokat']
 
@@ -55,9 +55,17 @@ export default function Apply() {
           outstanding_balance: s.outstanding_balance ? Number(s.outstanding_balance) : 0
         }))
       }
-      const { data } = await startApplication(payload)
-      setCreds({ application_number: data.application_number, access_code: data.access_code })
-      return data
+      if (creds) {
+        // Already have an application — update it in place, no new credentials issued
+        await updateApplication(creds.application_number, creds.access_code, payload)
+        return creds
+      } else {
+        // First save — create the application and show credentials once
+        const { data } = await startApplication(payload)
+        const newCreds = { application_number: data.application_number, access_code: data.access_code }
+        setCreds(newCreds)
+        return newCreds
+      }
     } catch (e) {
       const detail = e.response?.data?.detail
       const msg = Array.isArray(detail)
@@ -80,6 +88,7 @@ export default function Apply() {
     try {
       let c = creds
       if (!c) c = await saveDraft()
+      else await saveDraft() // ensure latest edits are saved before submitting
       await doUploads(c.application_number, c.access_code)
       await submitApplication(c.application_number, c.access_code)
       navigate('/confirmation', { state: c })

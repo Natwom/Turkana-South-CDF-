@@ -30,6 +30,68 @@ def build_application(db: Session, data: ApplicationCreate, app_no: str, code: s
     db.commit(); db.refresh(app)
     return app
 
+def update_application(db: Session, app: Application, data: ApplicationCreate) -> Application:
+    """Update an existing draft application's data in place, without changing its
+    application_number or access_code. Replaces child records (applicant, family,
+    guardians, siblings, funding history) rather than diffing them."""
+    app.category = data.category
+    app.amount_requested = data.amount_requested
+    app.family_status = data.family_status
+    app.family_status_other = data.family_status_other
+
+    a = data.applicant
+    if app.applicant:
+        for k, v in a.model_dump().items():
+            setattr(app.applicant, k, v)
+    else:
+        db.add(ApplicantDetail(application_id=app.id, **a.model_dump()))
+
+    f = data.family
+    if app.family:
+        app.family.reason_for_bursary = f.reason_for_bursary
+        app.family.applicant_disability = f.applicant_disability
+        app.family.applicant_disability_desc = f.applicant_disability_desc if f.applicant_disability else None
+        app.family.chronic_illness = f.chronic_illness
+        app.family.chronic_illness_desc = f.chronic_illness_desc if f.chronic_illness else None
+        app.family.guardian_disability = f.guardian_disability
+        app.family.guardian_disability_desc = f.guardian_disability_desc if f.guardian_disability else None
+        fam = app.family
+        # Replace guardians
+        for g in list(db.query(Guardian).filter_by(family_id=fam.id)):
+            db.delete(g)
+        db.flush()
+        if f.father: db.add(Guardian(family_id=fam.id, relation="Father", **f.father.model_dump()))
+        if f.mother: db.add(Guardian(family_id=fam.id, relation="Mother", **f.mother.model_dump()))
+    else:
+        fam = FamilyDetail(application_id=app.id,
+                           reason_for_bursary=f.reason_for_bursary,
+                           applicant_disability=f.applicant_disability,
+                           applicant_disability_desc=f.applicant_disability_desc if f.applicant_disability else None,
+                           chronic_illness=f.chronic_illness,
+                           chronic_illness_desc=f.chronic_illness_desc if f.chronic_illness else None,
+                           guardian_disability=f.guardian_disability,
+                           guardian_disability_desc=f.guardian_disability_desc if f.guardian_disability else None)
+        db.add(fam); db.flush()
+        if f.father: db.add(Guardian(family_id=fam.id, relation="Father", **f.father.model_dump()))
+        if f.mother: db.add(Guardian(family_id=fam.id, relation="Mother", **f.mother.model_dump()))
+
+    # Replace siblings
+    for s in list(db.query(Sibling).filter_by(application_id=app.id)):
+        db.delete(s)
+    db.flush()
+    for s in data.siblings:
+        db.add(Sibling(application_id=app.id, **s.model_dump()))
+
+    # Replace funding history
+    for h in list(db.query(EducationFunding).filter_by(application_id=app.id)):
+        db.delete(h)
+    db.flush()
+    for h in data.funding_history:
+        db.add(EducationFunding(application_id=app.id, **h.model_dump()))
+
+    db.commit(); db.refresh(app)
+    return app
+
 def to_public_dict(app: Application) -> dict:
     a, fam = app.applicant, app.family
     return {
