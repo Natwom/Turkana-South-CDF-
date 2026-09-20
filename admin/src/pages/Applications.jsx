@@ -1,6 +1,6 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import api from '../services/api'
+import api, { downloadFile } from '../services/api'
 
 const STATUS_COLORS = {
   'Draft': 'bg-gray-200 text-gray-700', 'Submitted': 'bg-blue-100 text-blue-700',
@@ -22,6 +22,8 @@ const COLUMNS = [
   { key: 'status', label: 'Status', type: 'list', get: a => a.status || '' },
   { key: 'date', label: 'Date', type: 'text', get: a => a.status_history?.[0]?.created_at?.slice(0, 10) || '' },
 ]
+
+const PAGE_SIZE = 25
 
 function ColumnFilterButton({ col, values, active, onChange }) {
   const [open, setOpen] = useState(false)
@@ -101,19 +103,34 @@ function ColumnFilterButton({ col, values, active, onChange }) {
   )
 }
 
+function Skeleton() {
+  return (
+    <div className="space-y-4 animate-pulse">
+      <div className="h-8 w-40 bg-gray-200 rounded" />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-20 bg-gray-200 rounded-xl" />)}
+      </div>
+      <div className="h-96 bg-gray-200 rounded-2xl" />
+    </div>
+  )
+}
+
 export default function Applications() {
   const [allItems, setAllItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [colFilters, setColFilters] = useState({})
+  const [quickSearch, setQuickSearch] = useState('')
   const [sortKey, setSortKey] = useState('date')
   const [sortDir, setSortDir] = useState('desc')
+  const [page, setPage] = useState(1)
 
-  useEffect(() => {
-    api.get('/admin/applications', { params: { size: 1000 } }).then(r => {
-      setAllItems(r.data.items || [])
-      setLoading(false)
-    })
-  }, [])
+  const load = () => {
+    setLoading(true)
+    api.get('/admin/applications', { params: { size: 1000 } })
+      .then(r => setAllItems(r.data.items || []))
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => { load() }, [])
 
   const columnValues = key => {
     const col = COLUMNS.find(c => c.key === key)
@@ -127,7 +144,20 @@ export default function Applications() {
       else next[key] = value
       return next
     })
+    setPage(1)
   }
+
+  const summary = useMemo(() => {
+    const total = allItems.length
+    const totalRequested = allItems.reduce((s, a) => s + Number(a.amount_requested || 0), 0)
+    const needsReview = allItems.filter(a =>
+      ['Submitted', 'Awaiting Physical Verification', 'Signed Form Uploaded', 'Under Admin Review'].includes(a.status)
+    ).length
+    const approved = allItems.filter(a =>
+      ['Approved', 'Amount Allocated', 'Disbursed'].includes(a.status)
+    ).length
+    return { total, totalRequested, needsReview, approved }
+  }, [allItems])
 
   const filtered = allItems.filter(a => {
     for (const col of COLUMNS) {
@@ -139,6 +169,13 @@ export default function Applications() {
       } else {
         if (f.text && !String(v).toLowerCase().includes(f.text.toLowerCase())) return false
       }
+    }
+    if (quickSearch) {
+      const haystack = [
+        a.application_number, a.applicant?.full_name, a.applicant?.institution,
+        a.applicant?.reg_number, a.applicant?.id_number, a.applicant?.ward
+      ].join(' ').toLowerCase()
+      if (!haystack.includes(quickSearch.toLowerCase())) return false
     }
     return true
   })
@@ -152,25 +189,75 @@ export default function Applications() {
     return sortDir === 'asc' ? cmp : -cmp
   })
 
+  const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE))
+  const pageItems = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+
   const toggleSort = key => {
     if (sortKey === key) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
     else { setSortKey(key); setSortDir('asc') }
+    setPage(1)
   }
 
-  const clearAllFilters = () => setColFilters({})
+  const clearAllFilters = () => { setColFilters({}); setQuickSearch(''); setPage(1) }
+  const activeFilterCount = Object.keys(colFilters).length + (quickSearch ? 1 : 0)
+
+  if (loading && allItems.length === 0) return <Skeleton />
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-2xl font-bold text-brand">Applications</h2>
-        {Object.keys(colFilters).length > 0 && (
-          <button className="btn-outline !py-1.5 !px-4 text-sm" onClick={clearAllFilters}>Clear all filters</button>
+        <div className="flex gap-2">
+          <button className="btn-outline !py-1.5 !px-4 text-sm" onClick={load}>
+            Refresh
+          </button>
+          <button
+            className="btn-outline !py-1.5 !px-4 text-sm"
+            onClick={() => downloadFile('/admin/export/applications', 'Turkana_South_Bursary_Applications.xlsx')}
+          >
+            Export to Excel
+          </button>
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="card">
+          <p className="text-xs text-gray-500">Total Applications</p>
+          <p className="text-xl font-bold text-brand">{summary.total}</p>
+        </div>
+        <div className="card">
+          <p className="text-xs text-gray-500">Total Amount Requested</p>
+          <p className="text-xl font-bold text-gray-800">KSh {summary.totalRequested.toLocaleString()}</p>
+        </div>
+        <div className="card">
+          <p className="text-xs text-gray-500">Awaiting Review</p>
+          <p className="text-xl font-bold text-amber-600">{summary.needsReview}</p>
+        </div>
+        <div className="card">
+          <p className="text-xs text-gray-500">Approved or Further</p>
+          <p className="text-xl font-bold text-green-700">{summary.approved}</p>
+        </div>
+      </div>
+
+      {/* Quick search + filter status */}
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          className="input flex-1 min-w-[240px]"
+          placeholder="Quick search: name, app number, reg no, ID, ward…"
+          value={quickSearch}
+          onChange={e => { setQuickSearch(e.target.value); setPage(1) }}
+        />
+        {activeFilterCount > 0 && (
+          <button className="btn-outline !py-1.5 !px-4 text-sm whitespace-nowrap" onClick={clearAllFilters}>
+            Clear all filters ({activeFilterCount})
+          </button>
         )}
       </div>
 
       <div className="card !p-0 overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left select-none">
+          <thead className="bg-gray-50 text-left select-none sticky top-0 z-10">
             <tr>
               {COLUMNS.map(col => (
                 <th key={col.key} className="px-4 py-3 font-semibold whitespace-nowrap">
@@ -186,11 +273,11 @@ export default function Applications() {
                   />
                 </th>
               ))}
-              <th className="px-4 py-3 font-semibold"></th>
+              <th className="px-4 py-3 font-semibold">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {sorted.map(a => (
+            {pageItems.map(a => (
               <tr key={a.application_number} className="border-t hover:bg-gray-50">
                 <td className="px-4 py-3 font-mono text-xs">{a.application_number}</td>
                 <td className="px-4 py-3 font-medium">{a.applicant?.full_name}</td>
@@ -199,17 +286,48 @@ export default function Applications() {
                 <td className="px-4 py-3">{Number(a.amount_requested || 0).toLocaleString()}</td>
                 <td className="px-4 py-3"><span className={`badge ${STATUS_COLORS[a.status] || 'bg-gray-100'}`}>{a.status}</span></td>
                 <td className="px-4 py-3 text-gray-500 text-xs">{a.status_history?.[0]?.created_at?.slice(0, 10)}</td>
-                <td className="px-4 py-3">
-                  <Link to={`/applications/${a.id}`} className="text-brand font-semibold hover:underline">View</Link>
+                <td className="px-4 py-3 whitespace-nowrap">
+                  <Link to={`/applications/${a.id}`} className="text-brand font-semibold hover:underline mr-3">View</Link>
+                  <button
+                    className="text-gray-500 hover:text-brand text-xs"
+                    onClick={() => downloadFile(`/admin/applications/${a.id}/pdf`, `${a.application_number}.pdf`)}
+                  >
+                    PDF
+                  </button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
         {!loading && sorted.length === 0 && <p className="text-center text-gray-500 py-10">No applications match the current filters.</p>}
-        {loading && <p className="text-center text-gray-500 py-10">Loading…</p>}
       </div>
-      <p className="text-sm text-gray-500">{sorted.length} of {allItems.length} application(s) shown</p>
+
+      {/* Pagination */}
+      {sorted.length > 0 && (
+        <div className="flex items-center justify-between text-sm">
+          <p className="text-gray-500">
+            Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, sorted.length)} of {sorted.length}
+            {sorted.length !== allItems.length && ` (filtered from ${allItems.length})`}
+          </p>
+          <div className="flex gap-2">
+            <button
+              className="btn-outline !py-1 !px-3 text-sm"
+              disabled={page === 1}
+              onClick={() => setPage(p => p - 1)}
+            >
+              Previous
+            </button>
+            <span className="px-2 py-1 text-gray-600">Page {page} of {totalPages}</span>
+            <button
+              className="btn-outline !py-1 !px-3 text-sm"
+              disabled={page === totalPages}
+              onClick={() => setPage(p => p + 1)}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
