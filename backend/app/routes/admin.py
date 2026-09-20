@@ -176,6 +176,9 @@ def delete_application(app_id: int, db: Session = Depends(get_db),
         except Exception:
             pass
 
+        # Notification has no ORM-level cascade — delete manually first
+        db.query(Notification).filter_by(application_id=app.id).delete()
+
         db.delete(app)
         db.commit()
 
