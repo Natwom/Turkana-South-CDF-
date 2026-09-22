@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { accessApplication, uploadSignedForm, uploadDocument, getPdfUrl } from '../services/api'
 import AllocationNotice from '../components/AllocationNotice'
 
@@ -8,6 +9,7 @@ export default function ContinueApp() {
   const [error, setError] = useState('')
   const [file, setFile] = useState(null)
   const [msg, setMsg] = useState('')
+  const navigate = useNavigate()
 
   const load = async () => {
     setError(''); setMsg('')
@@ -35,7 +37,7 @@ export default function ContinueApp() {
   if (!data) return (
     <div className="card max-w-md mx-auto">
       <h2 className="text-xl font-bold text-brand mb-4">Continue Application</h2>
-      <p className="text-sm text-gray-600 mb-4">Enter your Application Number and Access Code to continue, upload documents, or upload your signed/stamped form.</p>
+      <p className="text-sm text-gray-600 mb-4">Enter your Application Number and Access Code to continue filling your application, upload documents, or upload your signed/stamped form.</p>
       {error && <p className="text-red-600 text-sm mb-3">{error}</p>}
       <div className="space-y-4">
         <input className="input" placeholder="Application Number (e.g. TSB-2026-000001)"
@@ -49,6 +51,7 @@ export default function ContinueApp() {
 
   const signedDone = data.documents.some(d => d.is_signed_form)
   const canUploadSigned = ['Submitted', 'Awaiting Physical Verification'].includes(data.status)
+  const canContinueEditing = ['Draft', 'Correction Required'].includes(data.status)
 
   return (
     <div className="space-y-6">
@@ -61,6 +64,27 @@ export default function ContinueApp() {
           <span className="px-4 py-2 rounded-full text-sm font-bold bg-brand-light text-brand">{data.status}</span>
         </div>
         {msg && <p className="text-green-700 text-sm mt-3">{msg}</p>}
+
+        {canContinueEditing && (
+          <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <p className="text-sm text-blue-800 mb-3">
+              Missing information or documents? You can go back into your application, fill in what's
+              missing, and submit it once you're ready.
+            </p>
+            <button
+              className="btn-primary"
+              onClick={() => navigate('/apply', {
+                state: {
+                  creds: { application_number: data.application_number, access_code: form.access_code },
+                  prefill: data
+                }
+              })}
+            >
+              Continue Filling This Application
+            </button>
+          </div>
+        )}
+
         {data.corrections?.length > 0 && (
           <div className="mt-4 bg-amber-50 border border-amber-300 rounded-lg p-4">
             <p className="font-bold text-amber-800 text-sm mb-1">Correction required:</p>
@@ -74,7 +98,6 @@ export default function ContinueApp() {
         )}
       </div>
 
-      {/* ── NEW: allocation / disbursement notice ── */}
       <AllocationNotice data={data} />
 
       <div className="card">

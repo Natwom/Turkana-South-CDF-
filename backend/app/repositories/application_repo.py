@@ -2,6 +2,15 @@ from sqlalchemy.orm import Session
 from ..models.application import Application, ApplicantDetail, FamilyDetail, Guardian, Sibling, EducationFunding
 from ..schemas.application import ApplicationCreate
 
+def _sibling_kwargs(s):
+    """SiblingIn schema uses 'relationship'; the Sibling DB model column is
+    'relation_type'. Map explicitly instead of blind **model_dump()."""
+    return dict(
+        name=s.name, relation_type=s.relationship, school=s.school,
+        class_level=s.class_level, total_fees=s.total_fees,
+        outstanding_balance=s.outstanding_balance,
+    )
+
 def build_application(db: Session, data: ApplicationCreate, app_no: str, code: str) -> Application:
     app = Application(application_number=app_no, access_code=code,
                       funding_period_id=data.funding_period_id, category=data.category,
@@ -24,7 +33,7 @@ def build_application(db: Session, data: ApplicationCreate, app_no: str, code: s
     if f.father: db.add(Guardian(family_id=fam.id, relation="Father", **f.father.model_dump()))
     if f.mother: db.add(Guardian(family_id=fam.id, relation="Mother", **f.mother.model_dump()))
     for s in data.siblings:
-        db.add(Sibling(application_id=app.id, **s.model_dump()))
+        db.add(Sibling(application_id=app.id, **_sibling_kwargs(s)))
     for h in data.funding_history:
         db.add(EducationFunding(application_id=app.id, **h.model_dump()))
     db.commit(); db.refresh(app)
@@ -56,7 +65,6 @@ def update_application(db: Session, app: Application, data: ApplicationCreate) -
         app.family.guardian_disability = f.guardian_disability
         app.family.guardian_disability_desc = f.guardian_disability_desc if f.guardian_disability else None
         fam = app.family
-        # Replace guardians
         for g in list(db.query(Guardian).filter_by(family_id=fam.id)):
             db.delete(g)
         db.flush()
@@ -75,14 +83,12 @@ def update_application(db: Session, app: Application, data: ApplicationCreate) -
         if f.father: db.add(Guardian(family_id=fam.id, relation="Father", **f.father.model_dump()))
         if f.mother: db.add(Guardian(family_id=fam.id, relation="Mother", **f.mother.model_dump()))
 
-    # Replace siblings
     for s in list(db.query(Sibling).filter_by(application_id=app.id)):
         db.delete(s)
     db.flush()
     for s in data.siblings:
-        db.add(Sibling(application_id=app.id, **s.model_dump()))
+        db.add(Sibling(application_id=app.id, **_sibling_kwargs(s)))
 
-    # Replace funding history
     for h in list(db.query(EducationFunding).filter_by(application_id=app.id)):
         db.delete(h)
     db.flush()

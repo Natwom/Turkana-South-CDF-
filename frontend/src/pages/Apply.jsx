@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, useLocation, Link } from 'react-router-dom'
 import ProgressBar from '../components/ProgressBar'
 import { Input, Select, YesNo } from '../components/Field'
 import { startApplication, updateApplication, uploadDocument, submitApplication } from '../services/api'
@@ -20,6 +20,16 @@ const empty = {
   siblings: [], funding_history: []
 }
 
+function mapGuardian(g) {
+  if (!g) return {}
+  return {
+    name: g.name || '', occupation: g.occupation || '',
+    main_income_source: g.main_income_source || '', other_income_source: g.other_income_source || '',
+    employment_status: g.employment_status || '', is_retired: !!g.is_retired,
+    telephone: g.telephone || '',
+  }
+}
+
 export default function Apply() {
   const [step, setStep] = useState(0)
   const [form, setForm] = useState(empty)
@@ -29,6 +39,70 @@ export default function Apply() {
   const [error, setError] = useState('')
   const [agreed, setAgreed] = useState(false)
   const navigate = useNavigate()
+  const location = useLocation()
+
+  useEffect(() => {
+    const { creds: incomingCreds, prefill } = location.state || {}
+    if (incomingCreds && prefill) {
+      setCreds(incomingCreds)
+      setForm({
+        category: prefill.category || '',
+        amount_requested: prefill.amount_requested || '',
+        family_status: prefill.family_status || '',
+        family_status_other: prefill.family_status_other || '',
+        applicant: {
+          full_name: prefill.applicant?.full_name || '',
+          reg_number: prefill.applicant?.reg_number || '',
+          id_number: prefill.applicant?.id_number || '',
+          nemis_number: prefill.applicant?.nemis_number || '',
+          telephone: prefill.applicant?.telephone || '',
+          gender: prefill.applicant?.gender || '',
+          dob: prefill.applicant?.dob || '',
+          place_of_birth: prefill.applicant?.place_of_birth || '',
+          constituency: prefill.applicant?.constituency || 'Turkana South',
+          ward: prefill.applicant?.ward || '',
+          location: prefill.applicant?.location || '',
+          sub_location: prefill.applicant?.sub_location || '',
+          village: prefill.applicant?.village || '',
+          institution: prefill.applicant?.institution || '',
+          institution_code: prefill.applicant?.institution_code || '',
+          school_paybill: prefill.applicant?.school_paybill || '',
+          school_account_number: prefill.applicant?.school_account_number || '',
+          campus: prefill.applicant?.campus || '',
+          level_of_study: prefill.applicant?.level_of_study || '',
+          course: prefill.applicant?.course || '',
+          mode_of_study: prefill.applicant?.mode_of_study || '',
+          class_year: prefill.applicant?.class_year || '',
+          expected_completion: prefill.applicant?.expected_completion || '',
+        },
+        family: {
+          reason_for_bursary: prefill.family?.reason_for_bursary || '',
+          applicant_disability: !!prefill.family?.applicant_disability,
+          applicant_disability_desc: prefill.family?.applicant_disability_desc || '',
+          chronic_illness: !!prefill.family?.chronic_illness,
+          chronic_illness_desc: prefill.family?.chronic_illness_desc || '',
+          guardian_disability: !!prefill.family?.guardian_disability,
+          guardian_disability_desc: prefill.family?.guardian_disability_desc || '',
+          father: mapGuardian(prefill.family?.father),
+          mother: mapGuardian(prefill.family?.mother),
+        },
+        siblings: (prefill.siblings || []).map(s => ({
+          name: s.name || '',
+          relationship: s.relation_type || '',
+          school: s.school || '',
+          class_level: s.class_level || '',
+          total_fees: s.total_fees != null ? String(s.total_fees) : '',
+          outstanding_balance: s.outstanding_balance != null ? String(s.outstanding_balance) : '',
+        })),
+        funding_history: (prefill.funding_history || []).map(h => ({
+          level: h.level || '',
+          funding_source: h.funding_source || '',
+          other_source: h.other_source || '',
+        })),
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const set = (path, value) => {
     const keys = path.split('.')
