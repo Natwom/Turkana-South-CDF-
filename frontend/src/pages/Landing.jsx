@@ -9,7 +9,10 @@ export default function Landing() {
           The bursary application period is <strong>open</strong>. Apply online, upload your
           documents, and receive your Application Number and Access Code instantly.
         </p>
-        <p className="text-sm text-red-600 font-semibold mb-8">Deadline: 31 October 2026</p>
+        <p className="text-sm text-red-600 font-semibold mb-2">Deadline: 31 October 2026</p>
+        <p className="text-sm text-gray-500 mb-8">
+          Need help? Call the NG-CDF Turkana South office: <strong className="text-brand">0716 889 657</strong>
+        </p>
         <div className="flex flex-wrap justify-center gap-4">
           <Link to="/apply" className="btn-primary">Start Application</Link>
           <Link to="/continue" className="btn-outline">Continue / Upload Signed Form</Link>
@@ -50,6 +53,10 @@ export default function Landing() {
           and Access Code safe — you will need them to continue your application, upload your
           signed form, and track your status.
         </p>
+      </section>
+
+      <section className="text-center text-sm text-gray-500">
+        For any assistance, contact the Turkana South NG-CDF office on <strong className="text-brand">0716 889 657</strong>.
       </section>
     </div>
   )

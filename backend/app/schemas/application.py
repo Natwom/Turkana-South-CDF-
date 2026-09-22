@@ -42,7 +42,7 @@ class FundingHistoryIn(BaseModel):
 
 class ApplicantIn(BaseModel):
     full_name: str = ""
-    reg_number: Optional[str] = None
+    reg_number: str
     id_number: Optional[str] = None
     nemis_number: Optional[str] = None
     telephone: Optional[str] = None
@@ -54,7 +54,7 @@ class ApplicantIn(BaseModel):
     location: Optional[str] = None
     sub_location: Optional[str] = None
     village: Optional[str] = None
-    institution: Optional[str] = None
+    institution: str
     institution_code: Optional[str] = None
     school_paybill: Optional[str] = None
     school_account_number: Optional[str] = None
@@ -71,6 +71,20 @@ class ApplicantIn(BaseModel):
         if v == "" or v is None:
             return None
         return v
+
+    @field_validator("reg_number")
+    @classmethod
+    def reg_number_required(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Registration/Admission Number is required.")
+        return v.strip()
+
+    @field_validator("institution")
+    @classmethod
+    def institution_required(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Institution name is required.")
+        return v.strip()
 
 class FamilyIn(BaseModel):
     reason_for_bursary: Optional[str] = None

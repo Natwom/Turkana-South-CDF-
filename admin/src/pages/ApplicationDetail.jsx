@@ -144,9 +144,9 @@ export default function ApplicationDetail() {
             <button className="btn-primary mt-2" onClick={act.verify} disabled={checks.length < 3}>Mark Verified</button>
           </div>
           <div className="flex gap-2">
-            <button className="btn-primary !bg-green-700" onClick={act.approve}>Approve</button>
-            <input className="input" placeholder="Rejection reason" value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
-            <button className="btn-primary !bg-red-600" onClick={act.reject} disabled={!rejectReason}>Reject</button>
+            <button className="btn-primary !bg-green-700" onClick={act.approve}>Completed</button>
+            <input className="input" placeholder="Reason (required for Incomplete)" value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
+            <button className="btn-primary !bg-red-600" onClick={act.reject} disabled={!rejectReason}>Incomplete</button>
           </div>
           <div className="flex gap-2">
             <input className="input" placeholder="Correction message to student…" value={correction} onChange={e => setCorrection(e.target.value)} />

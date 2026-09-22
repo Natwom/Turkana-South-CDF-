@@ -115,6 +115,8 @@ export default function Apply() {
     })
   }
 
+  const missingRequired = !form.applicant.full_name || !form.applicant.reg_number || !form.applicant.institution || !form.amount_requested
+
   const saveDraft = async () => {
     setBusy(true); setError('')
     try {
@@ -130,11 +132,9 @@ export default function Apply() {
         }))
       }
       if (creds) {
-        // Already have an application — update it in place, no new credentials issued
         await updateApplication(creds.application_number, creds.access_code, payload)
         return creds
       } else {
-        // First save — create the application and show credentials once
         const { data } = await startApplication(payload)
         const newCreds = { application_number: data.application_number, access_code: data.access_code }
         setCreds(newCreds)
@@ -157,12 +157,13 @@ export default function Apply() {
   }
 
   const handleSubmit = async () => {
+    if (missingRequired) { setError('Please fill in your Full Name, Registration/Admission Number, Institution and Amount before submitting.'); return }
     if (!agreed) { setError('You must agree to the terms and conditions before submitting.'); return }
     setBusy(true); setError('')
     try {
       let c = creds
       if (!c) c = await saveDraft()
-      else await saveDraft() // ensure latest edits are saved before submitting
+      else await saveDraft()
       await doUploads(c.application_number, c.access_code)
       await submitApplication(c.application_number, c.access_code)
       navigate('/confirmation', { state: c })
@@ -196,8 +197,8 @@ export default function Apply() {
         <Select label="Application Category *" options={['Secondary', 'College', 'University', 'Others']}
           value={form.category} onChange={e => set('category', e.target.value)} />
       </div>
-      <Input label="Full Name of Student *" value={form.applicant.full_name} onChange={e => set('applicant.full_name', e.target.value)} />
-      <Input label="Registration/Admission No." value={form.applicant.reg_number} onChange={e => set('applicant.reg_number', e.target.value)} />
+      <Input label="Full Name of Student *" placeholder="e.g. Daniel Natwom" value={form.applicant.full_name} onChange={e => set('applicant.full_name', e.target.value)} />
+      <Input label="Registration/Admission No. *" value={form.applicant.reg_number} onChange={e => set('applicant.reg_number', e.target.value)} />
       <Input label="ID Number" value={form.applicant.id_number} onChange={e => set('applicant.id_number', e.target.value)} />
       <Input label="NEMIS Number" value={form.applicant.nemis_number} onChange={e => set('applicant.nemis_number', e.target.value)} />
       <Input label="Telephone Number" type="tel" value={form.applicant.telephone} onChange={e => set('applicant.telephone', e.target.value)} />
@@ -321,10 +322,11 @@ export default function Apply() {
 
     // 5 — Review
     <div className="space-y-4">
-      <p className="text-sm text-gray-600">Please confirm all information is correct before submitting. You will not be able to edit after submission unless the admin requests a correction.</p>
+      <p className="text-sm text-gray-600">Please confirm all information is correct before submitting. You will not be able to edit after submission.</p>
       <div className="card !p-4 text-sm space-y-2">
         <p><strong>Category:</strong> {form.category}</p>
         <p><strong>Name:</strong> {form.applicant.full_name}</p>
+        <p><strong>Registration/Admission No:</strong> {form.applicant.reg_number}</p>
         <p><strong>Institution:</strong> {form.applicant.institution} — {form.applicant.course}</p>
         <p><strong>Ward:</strong> {form.applicant.ward}</p>
         <p><strong>Family Status:</strong> {form.family_status} {form.family_status_other}</p>
@@ -368,7 +370,7 @@ export default function Apply() {
             {step < steps.length - 1 ? (
               <button type="button" className="btn-primary" onClick={() => setStep(step + 1)}>Next</button>
             ) : (
-              <button type="button" className="btn-primary" disabled={busy || !form.applicant.full_name || !form.amount_requested || !agreed}
+              <button type="button" className="btn-primary" disabled={busy || missingRequired || !agreed}
                 onClick={handleSubmit}>
                 {busy ? 'Submitting…' : 'Submit Application'}
               </button>
@@ -384,6 +386,9 @@ export default function Apply() {
           </p>
         </div>
       )}
+      <p className="text-center text-xs text-gray-400 mt-6">
+        Need help? Call the NG-CDF Turkana South office: 0716 889 657
+      </p>
     </div>
   )
 }

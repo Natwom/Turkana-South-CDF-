@@ -42,6 +42,16 @@ def save_upload(app: Application, upload: UploadFile, doc_type: str, is_signed: 
                    is_signed_form=is_signed)
     db.add(doc)
 
+def _find_duplicate(db: Session, reg_number: str, institution: str, exclude_app_id: int = None):
+    q = (db.query(Application)
+         .join(ApplicantDetail, ApplicantDetail.application_id == Application.id)
+         .filter(ApplicantDetail.reg_number == reg_number)
+         .filter(ApplicantDetail.institution == institution)
+         .filter(Application.status != "Rejected"))
+    if exclude_app_id:
+        q = q.filter(Application.id != exclude_app_id)
+    return q.first()
+
 @router.post("", response_model=ApplicationResponse, status_code=201)
 @limiter.limit("10/minute")
 def create_application(payload: ApplicationCreate, request: Request, db: Session = Depends(get_db)):
@@ -52,21 +62,17 @@ def create_application(payload: ApplicationCreate, request: Request, db: Session
     if period.closing_date and today > period.closing_date:
         raise HTTPException(400, "The bursary application period has closed.")
 
-    reg_number = (payload.applicant.reg_number or "").strip()
-    if reg_number:
-        existing = (db.query(Application)
-                    .join(ApplicantDetail, ApplicantDetail.application_id == Application.id)
-                    .filter(ApplicantDetail.reg_number == reg_number)
-                    .filter(Application.status != "Rejected")
-                    .first())
-        if existing:
-            raise HTTPException(
-                400,
-                f"An application already exists for registration/admission number '{reg_number}' "
-                f"(Application Number: {existing.application_number}). "
-                "If this is your application, please use 'Continue Application' with your "
-                "Application Number and Access Code instead of starting a new one."
-            )
+    reg_number = payload.applicant.reg_number.strip()
+    institution = payload.applicant.institution.strip()
+    existing = _find_duplicate(db, reg_number, institution)
+    if existing:
+        raise HTTPException(
+            400,
+            f"An application already exists for registration/admission number '{reg_number}' "
+            f"at '{institution}' (Application Number: {existing.application_number}). "
+            "If this is your application, please use 'Continue Application' with your "
+            "Application Number and Access Code instead of starting a new one."
+        )
 
     app_no, code = generate_unique_credentials(db, today.year)
     app = build_application(db, payload, app_no, code)
@@ -83,20 +89,15 @@ def update_existing_application(application_number: str, payload: ApplicationCre
     if app.status not in ("Draft", "Correction Required"):
         raise HTTPException(400, f"Application can no longer be edited (status: {app.status}).")
 
-    reg_number = (payload.applicant.reg_number or "").strip()
-    if reg_number:
-        existing = (db.query(Application)
-                    .join(ApplicantDetail, ApplicantDetail.application_id == Application.id)
-                    .filter(ApplicantDetail.reg_number == reg_number)
-                    .filter(Application.status != "Rejected")
-                    .filter(Application.id != app.id)
-                    .first())
-        if existing:
-            raise HTTPException(
-                400,
-                f"Another application already exists for registration/admission number '{reg_number}' "
-                f"(Application Number: {existing.application_number})."
-            )
+    reg_number = payload.applicant.reg_number.strip()
+    institution = payload.applicant.institution.strip()
+    existing = _find_duplicate(db, reg_number, institution, exclude_app_id=app.id)
+    if existing:
+        raise HTTPException(
+            400,
+            f"Another application already exists for registration/admission number '{reg_number}' "
+            f"at '{institution}' (Application Number: {existing.application_number})."
+        )
 
     app = update_application(db, app, payload)
     log_action("PUBLIC", "Application draft updated", app.application_number,
