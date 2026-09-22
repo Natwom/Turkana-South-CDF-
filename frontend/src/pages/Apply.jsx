@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import ProgressBar from '../components/ProgressBar'
 import { Input, Select, YesNo } from '../components/Field'
 import { startApplication, updateApplication, uploadDocument, submitApplication } from '../services/api'
@@ -142,7 +142,7 @@ export default function Apply() {
       <Input label="Campus/Branch" value={form.applicant.campus} onChange={e => set('applicant.campus', e.target.value)} />
       <Select label="Level of Study" options={['Secondary', 'Degree', 'Diploma', 'Certificate']} value={form.applicant.level_of_study} onChange={e => set('applicant.level_of_study', e.target.value)} />
       <Input label="Course of Study" value={form.applicant.course} onChange={e => set('applicant.course', e.target.value)} />
-      <Select label="Mode of Study" options={['Regular', 'Parallel', 'Boarding', 'Day']} value={form.applicant.mode_of_study} onChange={e => set('applicant.mode_of_study', e.target.value)} />
+      <Select label="Mode of Study" options={['Regular', 'Parallel', 'Boarding', 'Day']} value={form.applicant.mode_of_study} onChange={e=> set('applicant.mode_of_study', e.target.value)} />
       <Input label="Class/Year of Study" value={form.applicant.class_year} onChange={e => set('applicant.class_year', e.target.value)} />
       <Input label="Expected Year & Month of Completion" placeholder="e.g. 2029 December" value={form.applicant.expected_completion} onChange={e => set('applicant.expected_completion', e.target.value)} />
     </div>,
@@ -218,7 +218,7 @@ export default function Apply() {
             <h4 className="font-bold text-brand mb-3">{level} School Funding</h4>
             <div className="grid md:grid-cols-2 gap-4">
               <Input label="Funding Source (e.g. NG-CDF, HELB, Harambee, Self)" value={existing.funding_source} onChange={e => upsert('funding_source', e.target.value)} />
-              <Input label="Other Source of Funding" value={existing.other_source} onChange={e => upsert('other_source', e.target.value)} />
+              <Input label="Other Source of Funding" value={existing.other_source} onChange={e => upsert('other_source', e.target.value)}/>
             </div>
           </div>
         )
@@ -277,7 +277,11 @@ export default function Apply() {
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-brand mb-6">Bursary Application Form</h2>
+      <h2 className="text-2xl font-bold text-brand mb-2">Bursary Application Form</h2>
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 text-sm text-blue-800">
+        Already started an application? Don't create a new one —
+        <Link to="/continue" className="font-semibold underline ml-1">Continue Your Application</Link> instead using your Application Number and Access Code.
+      </div>
       <ProgressBar current={step} />
       {error && <div className="bg-red-50 border border-red-300 text-red-700 rounded-lg p-3 mb-4 text-sm">{error}</div>}
       <form onSubmit={e => e.preventDefault()} className="card">

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, Response
 from sqlalchemy.orm import Session
 from ..database import get_db
-from ..models.application import Application, Document
+from ..models.application import Application, Document, ApplicantDetail
 from ..models.funding import FundingPeriod
 from ..schemas.application import ApplicationCreate, AccessRequest, ApplicationResponse
 from ..services.numbering import generate_unique_credentials
@@ -51,6 +51,23 @@ def create_application(payload: ApplicationCreate, request: Request, db: Session
     today = datetime.now(timezone.utc).date()
     if period.closing_date and today > period.closing_date:
         raise HTTPException(400, "The bursary application period has closed.")
+
+    reg_number = (payload.applicant.reg_number or "").strip()
+    if reg_number:
+        existing = (db.query(Application)
+                    .join(ApplicantDetail, ApplicantDetail.application_id == Application.id)
+                    .filter(ApplicantDetail.reg_number == reg_number)
+                    .filter(Application.status != "Rejected")
+                    .first())
+        if existing:
+            raise HTTPException(
+                400,
+                f"An application already exists for registration/admission number '{reg_number}' "
+                f"(Application Number: {existing.application_number}). "
+                "If this is your application, please use 'Continue Application' with your "
+                "Application Number and Access Code instead of starting a new one."
+            )
+
     app_no, code = generate_unique_credentials(db, today.year)
     app = build_application(db, payload, app_no, code)
     transition(db, app, "Draft", "System", "Application created (draft).")
@@ -65,6 +82,22 @@ def update_existing_application(application_number: str, payload: ApplicationCre
     app = get_by_credentials(db, application_number, access_code)
     if app.status not in ("Draft", "Correction Required"):
         raise HTTPException(400, f"Application can no longer be edited (status: {app.status}).")
+
+    reg_number = (payload.applicant.reg_number or "").strip()
+    if reg_number:
+        existing = (db.query(Application)
+                    .join(ApplicantDetail, ApplicantDetail.application_id == Application.id)
+                    .filter(ApplicantDetail.reg_number == reg_number)
+                    .filter(Application.status != "Rejected")
+                    .filter(Application.id != app.id)
+                    .first())
+        if existing:
+            raise HTTPException(
+                400,
+                f"Another application already exists for registration/admission number '{reg_number}' "
+                f"(Application Number: {existing.application_number})."
+            )
+
     app = update_application(db, app, payload)
     log_action("PUBLIC", "Application draft updated", app.application_number,
                ip=request.client.host if request else None)
