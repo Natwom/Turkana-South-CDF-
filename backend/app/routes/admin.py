@@ -1,6 +1,8 @@
 import os
+from typing import List
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from fastapi.responses import Response
@@ -150,6 +152,93 @@ def add_note(app_id: int, payload: NoteIn, db: Session = Depends(get_db),
     return {"message": "Note added."}
 
 # ---------- DELETE (Super Admin only) ----------
+def _purge_application(db: Session, app: Application):
+    """Remove an application and everything attached to it from the database.
+    Does NOT commit — the caller commits (or rolls back). Returns the file paths
+    and folder that should be removed from disk AFTER a successful commit."""
+    file_paths = [os.path.join(settings.STORAGE_DIR, d.file_path) for d in app.documents]
+    folder = os.path.join(settings.STORAGE_DIR, app.application_number)
+
+    # These tables reference applications.id but have no ORM-level cascade,
+    # so they must be cleared explicitly or Postgres blocks the delete.
+    db.query(Notification).filter_by(application_id=app.id).delete()
+    db.query(VerificationRecord).filter_by(application_id=app.id).delete()
+    db.query(AdminNote).filter_by(application_id=app.id).delete()
+    db.query(AllocationHistory).filter_by(application_id=app.id).delete()
+
+    # Application.allocation has no cascade either; without this the allocation row
+    # would be orphaned (application_id set to NULL) and still counted in fund totals.
+    if app.allocation:
+        db.delete(app.allocation)
+
+    db.delete(app)  # cascades to applicant, family, guardians, siblings, funding history,
+                    # documents, status history and corrections
+    return file_paths, folder
+
+def _remove_files(file_paths, folder):
+    """Best-effort disk cleanup. Never raises."""
+    for p in file_paths:
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except Exception:
+            pass
+    try:
+        if os.path.isdir(folder) and not os.listdir(folder):
+            os.rmdir(folder)
+    except Exception:
+        pass
+
+class BulkDeleteIn(BaseModel):
+    ids: List[int]
+
+@router.post("/applications/bulk-delete")
+def bulk_delete_applications(payload: BulkDeleteIn, db: Session = Depends(get_db),
+                             admin=Depends(require_roles("SUPER_ADMIN"))):
+    ids = list(dict.fromkeys(payload.ids))  # de-duplicate, keep order
+    if not ids:
+        raise HTTPException(400, "No applications selected.")
+    if len(ids) > 500:
+        raise HTTPException(400, "Too many applications selected at once (maximum 500).")
+
+    deleted, failed = [], []
+    for app_id in ids:
+        app = db.get(Application, app_id)
+        if not app:
+            failed.append({"id": app_id, "application_number": None,
+                           "reason": "Not found (it may already have been deleted)."})
+            continue
+
+        app_number = app.application_number
+        applicant_name = app.applicant.full_name if app.applicant else "Unknown"
+
+        # Each application is deleted in its own transaction so one failure
+        # never blocks the rest of the batch.
+        try:
+            file_paths, folder = _purge_application(db, app)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            failed.append({"id": app_id, "application_number": app_number,
+                           "reason": f"{type(e).__name__}: {str(e)[:200]}"})
+            continue
+
+        _remove_files(file_paths, folder)
+        try:
+            log_action(admin.username, "Application DELETED (bulk)", app_number,
+                       f"Applicant: {applicant_name}")
+        except Exception:
+            pass
+        deleted.append(app_number)
+
+    try:
+        log_action(admin.username, "Bulk delete completed", f"{len(deleted)} deleted",
+                   f"{len(failed)} failed out of {len(ids)} requested")
+    except Exception:
+        pass
+
+    return {"deleted": len(deleted), "deleted_numbers": deleted, "failed": failed}
+
 @router.delete("/applications/{app_id}")
 def delete_application(app_id: int, db: Session = Depends(get_db),
                        admin=Depends(require_roles("SUPER_ADMIN"))):
@@ -161,26 +250,9 @@ def delete_application(app_id: int, db: Session = Depends(get_db),
         app_number = app.application_number
         applicant_name = app.applicant.full_name if app.applicant else "Unknown"
 
-        for d in app.documents:
-            try:
-                full_path = os.path.join(settings.STORAGE_DIR, d.file_path)
-                if os.path.exists(full_path):
-                    os.remove(full_path)
-            except Exception:
-                pass
-
-        try:
-            folder = os.path.join(settings.STORAGE_DIR, app_number)
-            if os.path.isdir(folder) and not os.listdir(folder):
-                os.rmdir(folder)
-        except Exception:
-            pass
-
-        # Notification has no ORM-level cascade — delete manually first
-        db.query(Notification).filter_by(application_id=app.id).delete()
-
-        db.delete(app)
+        file_paths, folder = _purge_application(db, app)
         db.commit()
+        _remove_files(file_paths, folder)
 
         try:
             log_action(admin.username, "Application DELETED", app_number,

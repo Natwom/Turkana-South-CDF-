@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import api, { downloadFile } from '../services/api'
+import { useAuth } from '../context/AuthContext'
 
 const STATUS_COLORS = {
   'Draft': 'bg-gray-200 text-gray-700', 'Submitted': 'bg-blue-100 text-blue-700',
@@ -24,7 +25,8 @@ const COLUMNS = [
 ]
 
 const PAGE_SIZE = 25
-const FROZEN_COL_WIDTH = 130 // px — width reserved for the frozen "App Number" column
+const FROZEN_COL_WIDTH = 130 // px — frozen "App Number" column
+const CHECK_COL_WIDTH = 44   // px — frozen checkbox column (Super Admin only)
 
 function ColumnFilterButton({ col, values, active, onChange }) {
   const [open, setOpen] = useState(false)
@@ -104,6 +106,78 @@ function ColumnFilterButton({ col, values, active, onChange }) {
   )
 }
 
+function BulkDeleteModal({ items, busy, onCancel, onConfirm }) {
+  const [text, setText] = useState('')
+
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape' && !busy) onCancel() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [busy, onCancel])
+
+  const preview = items.slice(0, 5)
+  const withAllocation = items.filter(a => a.allocation)
+  const allocatedTotal = withAllocation.reduce((s, a) => s + Number(a.allocation.amount || 0), 0)
+  const canConfirm = text.trim() === 'DELETE' && !busy
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+        <div>
+          <h3 className="text-lg font-bold text-red-700">
+            Delete {items.length} application{items.length === 1 ? '' : 's'}?
+          </h3>
+          <p className="text-sm text-gray-600 mt-1">
+            You are about to <strong>permanently delete</strong> the applications below, including
+            their uploaded documents, family details, status history and allocation records.
+            <strong> This cannot be undone.</strong>
+          </p>
+        </div>
+
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs space-y-1 max-h-40 overflow-y-auto">
+          {preview.map(a => (
+            <div key={a.id} className="flex justify-between gap-3">
+              <span className="font-mono">{a.application_number}</span>
+              <span className="text-gray-600 truncate">{a.applicant?.full_name || '—'}</span>
+            </div>
+          ))}
+          {items.length > preview.length && (
+            <p className="text-gray-500 pt-1">…and {items.length - preview.length} more</p>
+          )}
+        </div>
+
+        {withAllocation.length > 0 && (
+          <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs text-amber-800">
+            <strong>Warning:</strong> {withAllocation.length} of these application(s) already have funds
+            allocated (KSh {allocatedTotal.toLocaleString()} in total). Deleting them removes those
+            allocations from your funding totals.
+          </div>
+        )}
+
+        <div>
+          <label className="label">Type <strong>DELETE</strong> to confirm</label>
+          <input
+            className="input"
+            autoFocus
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && canConfirm && onConfirm()}
+            placeholder="DELETE"
+            disabled={busy}
+          />
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <button className="btn-outline" onClick={onCancel} disabled={busy}>Cancel</button>
+          <button className="btn-primary !bg-red-600 disabled:opacity-50" onClick={onConfirm} disabled={!canConfirm}>
+            {busy ? 'Deleting…' : `Delete ${items.length} application${items.length === 1 ? '' : 's'}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Skeleton() {
   return (
     <div className="space-y-4">
@@ -123,6 +197,9 @@ function Skeleton() {
 }
 
 export default function Applications() {
+  const { user } = useAuth()
+  const isSuper = user?.role === 'SUPER_ADMIN'
+
   const [allItems, setAllItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [colFilters, setColFilters] = useState({})
@@ -130,6 +207,11 @@ export default function Applications() {
   const [sortKey, setSortKey] = useState('date')
   const [sortDir, setSortDir] = useState('desc')
   const [page, setPage] = useState(1)
+
+  const [selected, setSelected] = useState(new Set())
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [result, setResult] = useState(null)
 
   const load = () => {
     setLoading(true)
@@ -166,7 +248,7 @@ export default function Applications() {
     return { total, totalRequested, needsReview, approved }
   }, [allItems])
 
-  const filtered = allItems.filter(a => {
+  const filtered = useMemo(() => allItems.filter(a => {
     for (const col of COLUMNS) {
       const f = colFilters[col.key]
       if (!f) continue
@@ -185,19 +267,69 @@ export default function Applications() {
       if (!haystack.includes(quickSearch.toLowerCase())) return false
     }
     return true
-  })
+  }), [allItems, colFilters, quickSearch])
 
-  const sortCol = COLUMNS.find(c => c.key === sortKey)
-  const sorted = [...filtered].sort((a, b) => {
-    const va = sortCol.get(a), vb = sortCol.get(b)
-    let cmp
-    if (sortCol.type === 'numeric') cmp = va - vb
-    else cmp = String(va).localeCompare(String(vb))
-    return sortDir === 'asc' ? cmp : -cmp
-  })
+  const sorted = useMemo(() => {
+    const sortCol = COLUMNS.find(c => c.key === sortKey)
+    return [...filtered].sort((a, b) => {
+      const va = sortCol.get(a), vb = sortCol.get(b)
+      const cmp = sortCol.type === 'numeric' ? va - vb : String(va).localeCompare(String(vb))
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+  }, [filtered, sortKey, sortDir])
+
+  // Keep the selection safe: only rows that are still loaded AND visible under the
+  // current filters can stay selected, so nothing hidden can be deleted by accident.
+  useEffect(() => {
+    setSelected(prev => {
+      if (prev.size === 0) return prev
+      const visible = new Set(filtered.map(a => a.id))
+      const next = new Set([...prev].filter(id => visible.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [filtered])
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE))
   const pageItems = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+
+  const pageIds = pageItems.map(a => a.id)
+  const allPageSelected = pageIds.length > 0 && pageIds.every(id => selected.has(id))
+  const somePageSelected = pageIds.some(id => selected.has(id))
+
+  const togglePage = () => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (allPageSelected) pageIds.forEach(id => next.delete(id))
+      else pageIds.forEach(id => next.add(id))
+      return next
+    })
+  }
+  const toggleOne = id => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+  const selectAllFiltered = () => setSelected(new Set(sorted.map(a => a.id)))
+
+  const selectedItems = allItems.filter(a => selected.has(a.id))
+
+  const runBulkDelete = async () => {
+    setDeleting(true)
+    try {
+      const { data } = await api.post('/admin/applications/bulk-delete', { ids: [...selected] })
+      setResult({ deleted: data.deleted, failed: data.failed || [] })
+      setSelected(new Set())
+      setConfirmOpen(false)
+      load()
+    } catch (e) {
+      setResult({ deleted: 0, failed: [], error: e.response?.data?.detail || 'Bulk delete failed.' })
+      setConfirmOpen(false)
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   const toggleSort = key => {
     if (sortKey === key) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
@@ -207,6 +339,8 @@ export default function Applications() {
 
   const clearAllFilters = () => { setColFilters({}); setQuickSearch(''); setPage(1) }
   const activeFilterCount = Object.keys(colFilters).length + (quickSearch ? 1 : 0)
+
+  const frozenLeft = isSuper ? CHECK_COL_WIDTH : 0
 
   if (loading && allItems.length === 0) return <Skeleton />
 
@@ -226,6 +360,34 @@ export default function Applications() {
           </button>
         </div>
       </div>
+
+      {/* Result of the last bulk delete */}
+      {result && (
+        <div className={`rounded-xl border px-4 py-3 text-sm flex items-start justify-between gap-4 ${
+          result.error || result.failed.length > 0
+            ? 'bg-amber-50 border-amber-300 text-amber-900'
+            : 'bg-green-50 border-green-300 text-green-800'
+        }`}>
+          <div className="space-y-1">
+            {result.error ? (
+              <p><strong>Bulk delete failed:</strong> {result.error}</p>
+            ) : (
+              <p>
+                <strong>{result.deleted}</strong> application{result.deleted === 1 ? '' : 's'} deleted
+                {result.failed.length > 0 && <>, <strong>{result.failed.length}</strong> could not be deleted</>}.
+              </p>
+            )}
+            {result.failed.length > 0 && (
+              <ul className="list-disc list-inside text-xs">
+                {result.failed.map((f, i) => (
+                  <li key={i}>{f.application_number || `ID ${f.id}`}: {f.reason}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <button className="text-xs underline shrink-0" onClick={() => setResult(null)}>Dismiss</button>
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -262,15 +424,54 @@ export default function Applications() {
         )}
       </div>
 
-      {/* Freeze-panes table: header row frozen (sticky top) + App Number column frozen (sticky left) */}
+      {/* Selection bar (Super Admin only) */}
+      {isSuper && selected.size > 0 && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm text-red-800">
+            <strong>{selected.size}</strong> application{selected.size === 1 ? '' : 's'} selected
+            {allPageSelected && sorted.length > pageItems.length && selected.size < sorted.length && (
+              <button className="ml-3 underline font-semibold" onClick={selectAllFiltered}>
+                Select all {sorted.length} matching applications
+              </button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button className="btn-outline !py-1.5 !px-4 text-sm" onClick={() => setSelected(new Set())}>
+              Clear selection
+            </button>
+            <button
+              className="btn-primary !bg-red-600 !py-1.5 !px-4 text-sm"
+              onClick={() => setConfirmOpen(true)}
+            >
+              Delete Selected ({selected.size})
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Freeze-panes table: header row frozen (sticky top) + checkbox and App Number columns frozen (sticky left) */}
       <div className="card !p-0">
         <div className="overflow-auto rounded-xl" style={{ maxHeight: '70vh' }}>
           <table className="w-full text-sm border-separate border-spacing-0">
             <thead>
               <tr>
+                {isSuper && (
+                  <th
+                    className="px-3 py-3 bg-gray-100 sticky top-0 left-0 z-30 border-b border-gray-200"
+                    style={{ minWidth: CHECK_COL_WIDTH, width: CHECK_COL_WIDTH }}
+                  >
+                    <input
+                      type="checkbox"
+                      title="Select all on this page"
+                      checked={allPageSelected}
+                      ref={el => { if (el) el.indeterminate = somePageSelected && !allPageSelected }}
+                      onChange={togglePage}
+                    />
+                  </th>
+                )}
                 <th
-                  className="px-4 py-3 font-semibold whitespace-nowrap text-left bg-gray-100 sticky top-0 left-0 z-30 border-b border-r border-gray-200"
-                  style={{ minWidth: FROZEN_COL_WIDTH, width: FROZEN_COL_WIDTH }}
+                  className="px-4 py-3 font-semibold whitespace-nowrap text-left bg-gray-100 sticky top-0 z-30 border-b border-r border-gray-200"
+                  style={{ left: frozenLeft, minWidth: FROZEN_COL_WIDTH, width: FROZEN_COL_WIDTH }}
                 >
                   <span className="cursor-pointer hover:text-brand" onClick={() => toggleSort('application_number')}>
                     App Number
@@ -306,35 +507,47 @@ export default function Applications() {
               </tr>
             </thead>
             <tbody>
-              {pageItems.map(a => (
-                <tr key={a.application_number} className="hover:bg-gray-50 group">
-                  <td
-                    className="px-4 py-3 font-mono text-xs bg-white sticky left-0 z-10 border-r border-b border-gray-100 group-hover:bg-gray-50"
-                    style={{ minWidth: FROZEN_COL_WIDTH, width: FROZEN_COL_WIDTH }}
-                  >
-                    {a.application_number}
-                  </td>
-                  <td className="px-4 py-3 font-medium border-b border-gray-100">{a.applicant?.full_name}</td>
-                  <td className="px-4 py-3 border-b border-gray-100">{a.applicant?.institution}</td>
-                  <td className="px-4 py-3 border-b border-gray-100">{a.applicant?.ward}</td>
-                  <td className="px-4 py-3 border-b border-gray-100">{Number(a.amount_requested || 0).toLocaleString()}</td>
-                  <td className="px-4 py-3 border-b border-gray-100">
-                    <span className={`badge ${STATUS_COLORS[a.status] || 'bg-gray-100'}`}>{a.status}</span>
-                  </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs border-b border-gray-100">
-                    {a.status_history?.[0]?.created_at?.slice(0, 10)}
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap border-b border-gray-100">
-                    <Link to={`/applications/${a.id}`} className="text-brand font-semibold hover:underline mr-3">View</Link>
-                    <button
-                      className="text-gray-500 hover:text-brand text-xs"
-                      onClick={() => downloadFile(`/admin/applications/${a.id}/pdf`, `${a.application_number}.pdf`)}
+              {pageItems.map(a => {
+                const isSel = selected.has(a.id)
+                const frozenBg = isSel ? 'bg-red-50' : 'bg-white group-hover:bg-gray-50'
+                return (
+                  <tr key={a.application_number} className={`group ${isSel ? 'bg-red-50' : 'hover:bg-gray-50'}`}>
+                    {isSuper && (
+                      <td
+                        className={`px-3 py-3 sticky left-0 z-10 border-b border-gray-100 ${frozenBg}`}
+                        style={{ minWidth: CHECK_COL_WIDTH, width: CHECK_COL_WIDTH }}
+                      >
+                        <input type="checkbox" checked={isSel} onChange={() => toggleOne(a.id)} />
+                      </td>
+                    )}
+                    <td
+                      className={`px-4 py-3 font-mono text-xs sticky z-10 border-r border-b border-gray-100 ${frozenBg}`}
+                      style={{ left: frozenLeft, minWidth: FROZEN_COL_WIDTH, width: FROZEN_COL_WIDTH }}
                     >
-                      PDF
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                      {a.application_number}
+                    </td>
+                    <td className="px-4 py-3 font-medium border-b border-gray-100">{a.applicant?.full_name}</td>
+                    <td className="px-4 py-3 border-b border-gray-100">{a.applicant?.institution}</td>
+                    <td className="px-4 py-3 border-b border-gray-100">{a.applicant?.ward}</td>
+                    <td className="px-4 py-3 border-b border-gray-100">{Number(a.amount_requested || 0).toLocaleString()}</td>
+                    <td className="px-4 py-3 border-b border-gray-100">
+                      <span className={`badge ${STATUS_COLORS[a.status] || 'bg-gray-100'}`}>{a.status}</span>
+                    </td>
+                    <td className="px-4 py-3 text-gray-500 text-xs border-b border-gray-100">
+                      {a.status_history?.[0]?.created_at?.slice(0, 10)}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap border-b border-gray-100">
+                      <Link to={`/applications/${a.id}`} className="text-brand font-semibold hover:underline mr-3">View</Link>
+                      <button
+                        className="text-gray-500 hover:text-brand text-xs"
+                        onClick={() => downloadFile(`/admin/applications/${a.id}/pdf`, `${a.application_number}.pdf`)}
+                      >
+                        PDF
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -366,6 +579,15 @@ export default function Applications() {
             </button>
           </div>
         </div>
+      )}
+
+      {confirmOpen && (
+        <BulkDeleteModal
+          items={selectedItems}
+          busy={deleting}
+          onCancel={() => setConfirmOpen(false)}
+          onConfirm={runBulkDelete}
+        />
       )}
     </div>
   )
