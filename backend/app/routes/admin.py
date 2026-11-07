@@ -1,46 +1,114 @@
 import os
-from typing import List
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
-from sqlalchemy import func, or_
+from typing import List, Literal, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
-from ..database import get_db
+from pydantic import BaseModel, Field
+from sqlalchemy import func, or_
+from sqlalchemy.orm import Session
+
 from ..core.config import settings
-from ..core.security import (verify_password, create_token, get_current_admin, require_roles, hash_password)
-from ..schemas.admin import (AdminLogin, StatusUpdate, CorrectionRequestIn,
-                             VerificationIn, AllocationIn, DisburseIn, NoteIn)
-from ..models.user import User
-from ..models.funding import FundingPeriod
-from ..models.application import (Application, Document, VerificationRecord, CorrectionRequest,
-    AdminNote, Allocation, AllocationHistory, AuditLog, Notification)
-from ..services.status import transition
-from ..services.pdf_service import generate_application_pdf
-from ..services import excel_service
-from ..repositories.application_repo import to_public_dict
+from ..core.security import (DUMMY_HASH, check_csrf, create_token, get_current_admin, hash_password,
+                             require_roles, validate_password_strength, verify_password)
+from ..database import get_db
 from ..middleware.audit import log_action
+from ..middleware.rate_limit import (client_ip, ensure_not_locked, limiter, login_by_ip,
+                                     login_by_ip_user, login_by_user, register_failures)
+from ..models.application import (AdminNote, Allocation, AllocationHistory, Application, AuditLog,
+                                  CorrectionRequest, Document, Notification, VerificationRecord)
+from ..models.funding import FundingPeriod
+from ..models.user import User
+from ..repositories.application_repo import to_public_dict
+from ..schemas.admin import (AdminLogin, AllocationIn, CorrectionRequestIn, DisburseIn, NoteIn,
+                             StatusUpdate, VerificationIn)
+from ..services import excel_service
+from ..services.pdf_service import generate_application_pdf
+from ..services.status import transition
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
+COOKIE_PATH = "/api"
+MAX_IMPORT_BYTES = 5 * 1024 * 1024
+
+
+# ---------- helpers ----------
+def _like(term: str) -> str:
+    """Escape LIKE wildcards so users can't craft expensive patterns."""
+    esc = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{esc}%"
+
+
 # ---------- AUTH ----------
 @router.post("/login")
-def login(payload: AdminLogin, db: Session = Depends(get_db)):
-    user = db.query(User).filter(or_(User.username == payload.username,
-                                     User.email == payload.username)).first()
-    if not user or not verify_password(payload.password, user.password_hash):
+@limiter.limit("10/minute")
+def login(request: Request, response: Response, payload: AdminLogin, db: Session = Depends(get_db)):
+    check_csrf(request)
+    ip = client_ip(request)
+    ident = (payload.username or "").strip().lower()[:128]
+    pairs = [(login_by_ip_user, f"{ip}|{ident}"), (login_by_user, ident), (login_by_ip, ip)]
+    ensure_not_locked(*pairs)
+
+    user = db.query(User).filter(or_(func.lower(User.username) == ident,
+                                     func.lower(User.email) == ident)).first()
+    # Always run one bcrypt verification so timing doesn't reveal if the user exists.
+    ok = verify_password((payload.password or "")[:128],
+                         user.password_hash if user else DUMMY_HASH) and user is not None
+    if not ok:
+        register_failures(*pairs)
+        log_action(ident or "unknown", "Admin login FAILED")
         raise HTTPException(401, "Invalid credentials.")
     if not user.is_active:
         raise HTTPException(403, "Account disabled.")
+
+    login_by_ip_user.reset(f"{ip}|{ident}")
     user.last_login = datetime.now(timezone.utc)
     db.commit()
     log_action(user.username, "Admin login")
-    return {"access_token": create_token({"sub": str(user.id), "role": user.role}),
-            "token_type": "bearer", "role": user.role, "full_name": user.full_name}
+
+    token = create_token({"sub": str(user.id), "role": user.role})
+    response.set_cookie(settings.COOKIE_NAME, token,
+                        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+                        httponly=True, secure=settings.cookie_secure, samesite="strict",
+                        path=COOKIE_PATH, domain=settings.COOKIE_DOMAIN)
+    # The token is only in the httpOnly cookie, never in the response body.
+    return {"role": user.role, "full_name": user.full_name}
+
+
+@router.post("/logout")
+def logout(request: Request, response: Response):
+    check_csrf(request)
+    response.delete_cookie(settings.COOKIE_NAME, path=COOKIE_PATH, domain=settings.COOKIE_DOMAIN)
+    return {"message": "Logged out."}
+
 
 @router.get("/me")
 def me(admin=Depends(get_current_admin)):
     return {"username": admin.username, "role": admin.role, "full_name": admin.full_name}
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str = Field(max_length=128)
+    new_password: str = Field(max_length=72)
+
+
+@router.post("/change-password")
+@limiter.limit("5/minute")
+def change_password(request: Request, payload: PasswordChangeIn, db: Session = Depends(get_db),
+                    admin=Depends(get_current_admin)):
+    if not verify_password(payload.current_password, admin.password_hash):
+        log_action(admin.username, "Password change FAILED")
+        raise HTTPException(400, "Current password is incorrect.")
+    err = validate_password_strength(payload.new_password, admin.username)
+    if err:
+        raise HTTPException(400, err)
+    if verify_password(payload.new_password, admin.password_hash):
+        raise HTTPException(400, "New password must be different from the current one.")
+    admin.password_hash = hash_password(payload.new_password)
+    db.commit()
+    log_action(admin.username, "Password changed")
+    return {"message": "Password updated."}
+
 
 # ---------- DASHBOARD ----------
 @router.get("/dashboard")
@@ -66,30 +134,35 @@ def dashboard(db: Session = Depends(get_db), admin=Depends(get_current_admin)):
             "total_fund": fund, "remaining_fund": fund - float(allocated),
             "by_ward": {w: c for w, c in by_ward_rows}}
 
+
 # ---------- APPLICATIONS ----------
 @router.get("/applications")
-def list_applications(status: str = None, ward: str = None, institution: str = None,
-                      search: str = None, sort: str = "newest",
-                      page: int = 1, size: int = 25,
+def list_applications(status: Optional[str] = Query(None, max_length=50),
+                      ward: Optional[str] = Query(None, max_length=100),
+                      institution: Optional[str] = Query(None, max_length=100),
+                      search: Optional[str] = Query(None, max_length=100),
+                      sort: str = Query("newest", max_length=20),
+                      page: int = Query(1, ge=1, le=100000), size: int = Query(25, ge=1, le=100),
                       db: Session = Depends(get_db), admin=Depends(get_current_admin)):
     q = db.query(Application).join(Application.applicant)
     A = Application.applicant.property.mapper.class_
     if status: q = q.filter(Application.status == status)
     if ward: q = q.filter(A.ward == ward)
-    if institution: q = q.filter(A.institution.ilike(f"%{institution}%"))
+    if institution: q = q.filter(A.institution.ilike(_like(institution), escape="\\"))
     if search:
-        like = f"%{search}%"
-        q = q.filter(or_(Application.application_number.ilike(like),
-                         A.full_name.ilike(like), A.reg_number.ilike(like),
-                         A.id_number.ilike(like)))
+        like = _like(search)
+        q = q.filter(or_(Application.application_number.ilike(like, escape="\\"),
+                         A.full_name.ilike(like, escape="\\"), A.reg_number.ilike(like, escape="\\"),
+                         A.id_number.ilike(like, escape="\\")))
     sort_map = {"newest": Application.created_at.desc(), "oldest": Application.created_at.asc(),
                 "highest_request": Application.amount_requested.desc(),
                 "lowest_request": Application.amount_requested.asc()}
     q = q.order_by(sort_map.get(sort, sort_map["newest"]))
     total = q.count()
-    items = q.offset((page-1)*size).limit(size).all()
+    items = q.offset((page - 1) * size).limit(size).all()
     return {"total": total, "page": page,
             "items": [{**to_public_dict(a), "access_code": None} for a in items]}
+
 
 @router.get("/applications/{app_id}")
 def get_application(app_id: int, db: Session = Depends(get_db),
@@ -97,6 +170,7 @@ def get_application(app_id: int, db: Session = Depends(get_db),
     app = db.get(Application, app_id)
     if not app: raise HTTPException(404, "Application not found.")
     data = to_public_dict(app)
+    data["access_code"] = None  # staff must never see the applicant's access code
     data["documents"] = [{"id": d.id, **d_} for d, d_ in zip(app.documents, data["documents"])]
     data["notes"] = [{"note": n.note, "is_student_visible": n.is_student_visible,
                       "created_by": n.created_by, "created_at": str(n.created_at)}
@@ -104,17 +178,31 @@ def get_application(app_id: int, db: Session = Depends(get_db),
     log_action(admin.username, "Application viewed", app.application_number)
     return data
 
+
+# Statuses that may only be reached through their dedicated endpoints
+# (allocation, disbursement) or by the applicant flow. ADJUST to your workflow.
+_BLOCKED_VIA_PATCH = {"Draft", "Submitted", "Awaiting Physical Verification", "Signed Form Uploaded",
+                      "Amount Allocated", "Disbursed"}
+_VERIFIER_ALLOWED = {"Under Admin Review", "Correction Required", "Verified"}
+
+
 @router.patch("/applications/{app_id}/status")
 def update_status(app_id: int, payload: StatusUpdate, db: Session = Depends(get_db),
                   admin=Depends(require_roles("BURSARY_ADMIN", "VERIFICATION_OFFICER"))):
     app = db.get(Application, app_id)
     if not app: raise HTTPException(404, "Not found.")
+    if admin.role != "SUPER_ADMIN":
+        if payload.status in _BLOCKED_VIA_PATCH:
+            raise HTTPException(403, "This status cannot be set manually.")
+        if admin.role == "VERIFICATION_OFFICER" and payload.status not in _VERIFIER_ALLOWED:
+            raise HTTPException(403, "Insufficient permissions for this status.")
     if payload.status == "Rejected" and not payload.reason:
         raise HTTPException(400, "Reason is required when rejecting.")
     transition(db, app, payload.status, admin.username, payload.reason or payload.remarks)
     db.commit()
     log_action(admin.username, f"Application {payload.status.lower()}", app.application_number, payload.reason)
     return {"status": app.status}
+
 
 @router.post("/applications/{app_id}/verify")
 def verify(app_id: int, payload: VerificationIn, db: Session = Depends(get_db),
@@ -127,6 +215,7 @@ def verify(app_id: int, payload: VerificationIn, db: Session = Depends(get_db),
     db.commit()
     log_action(admin.username, "Application verified", app.application_number)
     return {"status": app.status}
+
 
 @router.post("/applications/{app_id}/correction")
 def request_correction(app_id: int, payload: CorrectionRequestIn,
@@ -141,6 +230,7 @@ def request_correction(app_id: int, payload: CorrectionRequestIn,
     log_action(admin.username, "Correction requested", app.application_number, payload.message)
     return {"status": app.status}
 
+
 @router.post("/applications/{app_id}/notes")
 def add_note(app_id: int, payload: NoteIn, db: Session = Depends(get_db),
              admin=Depends(get_current_admin)):
@@ -149,7 +239,9 @@ def add_note(app_id: int, payload: NoteIn, db: Session = Depends(get_db),
     db.add(AdminNote(application_id=app.id, note=payload.note,
                      is_student_visible=payload.is_student_visible, created_by=admin.username))
     db.commit()
+    log_action(admin.username, "Note added", app.application_number)
     return {"message": "Note added."}
+
 
 # ---------- DELETE (Super Admin only) ----------
 def _purge_application(db: Session, app: Application):
@@ -159,15 +251,11 @@ def _purge_application(db: Session, app: Application):
     file_paths = [os.path.join(settings.STORAGE_DIR, d.file_path) for d in app.documents]
     folder = os.path.join(settings.STORAGE_DIR, app.application_number)
 
-    # These tables reference applications.id but have no ORM-level cascade,
-    # so they must be cleared explicitly or Postgres blocks the delete.
     db.query(Notification).filter_by(application_id=app.id).delete()
     db.query(VerificationRecord).filter_by(application_id=app.id).delete()
     db.query(AdminNote).filter_by(application_id=app.id).delete()
     db.query(AllocationHistory).filter_by(application_id=app.id).delete()
 
-    # Application.allocation has no cascade either; without this the allocation row
-    # would be orphaned (application_id set to NULL) and still counted in fund totals.
     if app.allocation:
         db.delete(app.allocation)
 
@@ -175,22 +263,33 @@ def _purge_application(db: Session, app: Application):
                     # documents, status history and corrections
     return file_paths, folder
 
+
 def _remove_files(file_paths, folder):
-    """Best-effort disk cleanup. Never raises."""
+    """Best-effort disk cleanup, restricted to the storage directory. Never raises."""
+    base = os.path.realpath(settings.STORAGE_DIR)
+
+    def inside(p):
+        try:
+            return os.path.commonpath([base, os.path.realpath(p)]) == base
+        except ValueError:
+            return False
+
     for p in file_paths:
         try:
-            if os.path.exists(p):
+            if inside(p) and os.path.exists(p):
                 os.remove(p)
         except Exception:
             pass
     try:
-        if os.path.isdir(folder) and not os.listdir(folder):
+        if inside(folder) and os.path.isdir(folder) and not os.listdir(folder):
             os.rmdir(folder)
     except Exception:
         pass
 
+
 class BulkDeleteIn(BaseModel):
     ids: List[int]
+
 
 @router.post("/applications/bulk-delete")
 def bulk_delete_applications(payload: BulkDeleteIn, db: Session = Depends(get_db),
@@ -212,61 +311,47 @@ def bulk_delete_applications(payload: BulkDeleteIn, db: Session = Depends(get_db
         app_number = app.application_number
         applicant_name = app.applicant.full_name if app.applicant else "Unknown"
 
-        # Each application is deleted in its own transaction so one failure
-        # never blocks the rest of the batch.
         try:
             file_paths, folder = _purge_application(db, app)
             db.commit()
-        except Exception as e:
+        except Exception:
             db.rollback()
+            log_action(admin.username, "Application delete FAILED (bulk)", app_number)
             failed.append({"id": app_id, "application_number": app_number,
-                           "reason": f"{type(e).__name__}: {str(e)[:200]}"})
+                           "reason": "Delete failed. See server logs."})
             continue
 
         _remove_files(file_paths, folder)
-        try:
-            log_action(admin.username, "Application DELETED (bulk)", app_number,
-                       f"Applicant: {applicant_name}")
-        except Exception:
-            pass
+        log_action(admin.username, "Application DELETED (bulk)", app_number,
+                   f"Applicant: {applicant_name}")
         deleted.append(app_number)
 
-    try:
-        log_action(admin.username, "Bulk delete completed", f"{len(deleted)} deleted",
-                   f"{len(failed)} failed out of {len(ids)} requested")
-    except Exception:
-        pass
-
+    log_action(admin.username, "Bulk delete completed", f"{len(deleted)} deleted",
+               f"{len(failed)} failed out of {len(ids)} requested")
     return {"deleted": len(deleted), "deleted_numbers": deleted, "failed": failed}
+
 
 @router.delete("/applications/{app_id}")
 def delete_application(app_id: int, db: Session = Depends(get_db),
                        admin=Depends(require_roles("SUPER_ADMIN"))):
+    app = db.get(Application, app_id)
+    if not app:
+        raise HTTPException(404, "Application not found.")
+
+    app_number = app.application_number
+    applicant_name = app.applicant.full_name if app.applicant else "Unknown"
     try:
-        app = db.get(Application, app_id)
-        if not app:
-            raise HTTPException(404, "Application not found.")
-
-        app_number = app.application_number
-        applicant_name = app.applicant.full_name if app.applicant else "Unknown"
-
         file_paths, folder = _purge_application(db, app)
         db.commit()
-        _remove_files(file_paths, folder)
-
-        try:
-            log_action(admin.username, "Application DELETED", app_number,
-                       f"Applicant: {applicant_name}")
-        except Exception:
-            pass
-
-        return {"message": f"Application {app_number} has been permanently deleted."}
-
-    except HTTPException:
-        raise
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(500, f"Delete failed: {type(e).__name__}: {str(e)}")
+        log_action(admin.username, "Application delete FAILED", app_number)
+        raise HTTPException(500, "Delete failed.")
+
+    _remove_files(file_paths, folder)
+    log_action(admin.username, "Application DELETED", app_number, f"Applicant: {applicant_name}")
+    return {"message": f"Application {app_number} has been permanently deleted."}
+
 
 # ---------- ALLOCATIONS ----------
 @router.post("/applications/{app_id}/allocation")
@@ -274,6 +359,8 @@ def allocate(app_id: int, payload: AllocationIn, db: Session = Depends(get_db),
              admin=Depends(require_roles("FINANCE_OFFICER", "BURSARY_ADMIN"))):
     app = db.get(Application, app_id)
     if not app: raise HTTPException(404, "Not found.")
+    if payload.amount is None or payload.amount <= 0:
+        raise HTTPException(400, "Amount must be greater than zero.")
     if app.status not in ("Approved", "Amount Allocated"):
         raise HTTPException(400, "Only approved applications can be allocated.")
     period = db.query(FundingPeriod).filter_by(is_active=True).first()
@@ -300,6 +387,7 @@ def allocate(app_id: int, payload: AllocationIn, db: Session = Depends(get_db),
                f"KSh {payload.amount:,.2f}")
     return {"status": app.status, "allocated": payload.amount}
 
+
 # ---------- DISBURSEMENT ----------
 @router.post("/applications/{app_id}/disburse")
 def mark_disbursed(app_id: int, payload: DisburseIn, db: Session = Depends(get_db),
@@ -320,6 +408,7 @@ def mark_disbursed(app_id: int, payload: DisburseIn, db: Session = Depends(get_d
                f"KSh {float(app.allocation.amount):,.2f}")
     return {"status": app.status, "disbursed": True}
 
+
 @router.post("/applications/{app_id}/undisburse")
 def undo_disburse(app_id: int, payload: DisburseIn, db: Session = Depends(get_db),
                   admin=Depends(require_roles("SUPER_ADMIN"))):
@@ -335,36 +424,54 @@ def undo_disburse(app_id: int, payload: DisburseIn, db: Session = Depends(get_db
     log_action(admin.username, "Disbursement reversed", app.application_number, payload.remarks)
     return {"status": app.status, "disbursed": False}
 
+
 # ---------- EXPORTS ----------
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
 @router.get("/export/applications")
-def export_applications(db: Session = Depends(get_db),
+@limiter.limit("10/hour")
+def export_applications(request: Request, db: Session = Depends(get_db),
                         admin=Depends(require_roles("REPORTING_OFFICER", "BURSARY_ADMIN"))):
     data = excel_service.export_applications(db.query(Application).all())
     log_action(admin.username, "Excel exported", "applications")
-    return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    return Response(data, media_type=XLSX,
                     headers={"Content-Disposition":
                              'attachment; filename="Turkana_South_Bursary_Applications.xlsx"'})
 
+
 @router.get("/export/allocations")
-def export_allocations(db: Session = Depends(get_db),
+@limiter.limit("10/hour")
+def export_allocations(request: Request, db: Session = Depends(get_db),
                        admin=Depends(require_roles("FINANCE_OFFICER", "REPORTING_OFFICER"))):
     period = db.query(FundingPeriod).filter_by(is_active=True).first()
     data = excel_service.export_allocations(db.query(Application).all(), period)
     log_action(admin.username, "Excel exported", "allocations")
-    return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    return Response(data, media_type=XLSX,
                     headers={"Content-Disposition":
                              'attachment; filename="Turkana_South_Bursary_Allocations.xlsx"'})
+
 
 @router.get("/export/template")
 def export_template(admin=Depends(get_current_admin)):
     data = excel_service.allocation_template()
-    return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    return Response(data, media_type=XLSX,
                     headers={"Content-Disposition": 'attachment; filename="Allocation_Template.xlsx"'})
 
+
 @router.post("/import/allocations")
-async def import_allocations(file: UploadFile, db: Session = Depends(get_db),
+@limiter.limit("10/hour")
+async def import_allocations(request: Request, file: UploadFile, db: Session = Depends(get_db),
                              admin=Depends(require_roles("FINANCE_OFFICER", "SUPER_ADMIN"))):
-    errors, rows = excel_service.parse_allocation_import(await file.read())
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(400, "Upload an .xlsx file.")
+    raw = await file.read(MAX_IMPORT_BYTES + 1)
+    if len(raw) > MAX_IMPORT_BYTES:
+        raise HTTPException(400, "File too large (max 5MB).")
+    if not raw.startswith(b"PK\x03\x04"):
+        raise HTTPException(400, "Not a valid .xlsx file.")
+
+    errors, rows = excel_service.parse_allocation_import(raw)
     if errors:
         return {"ok": False, "errors": errors, "imported": 0}
     imported = 0
@@ -372,6 +479,8 @@ async def import_allocations(file: UploadFile, db: Session = Depends(get_db),
         app = db.query(Application).filter_by(application_number=r["application_number"]).first()
         if not app:
             errors.append(f"{r['application_number']}: not found"); continue
+        if r["amount"] is None or r["amount"] <= 0:
+            errors.append(f"{r['application_number']}: amount must be greater than zero"); continue
         if app.allocation:
             db.add(AllocationHistory(application_id=app.id, previous_amount=app.allocation.amount,
                                      new_amount=r["amount"], changed_by=admin.username,
@@ -386,6 +495,7 @@ async def import_allocations(file: UploadFile, db: Session = Depends(get_db),
     log_action(admin.username, "Excel imported", "allocations", f"{imported} rows")
     return {"ok": True, "errors": errors, "imported": imported}
 
+
 # ---------- PDF (admin view) ----------
 @router.get("/applications/{app_id}/pdf")
 def admin_pdf(app_id: int, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
@@ -397,26 +507,42 @@ def admin_pdf(app_id: int, db: Session = Depends(get_db), admin=Depends(get_curr
                     headers={"Content-Disposition":
                              f'attachment; filename="{app.application_number}.pdf"'})
 
+
 # ---------- AUDIT LOG ----------
 @router.get("/audit-logs")
-def audit_logs(page: int = 1, size: int = 50, db: Session = Depends(get_db),
+def audit_logs(page: int = Query(1, ge=1, le=100000), size: int = Query(50, ge=1, le=200),
+               db: Session = Depends(get_db),
                admin=Depends(require_roles("SUPER_ADMIN", "REPORTING_OFFICER"))):
     q = db.query(AuditLog).order_by(AuditLog.created_at.desc())
     return {"total": q.count(),
             "items": [{"user": l.user, "action": l.action, "record": l.record,
                        "detail": l.detail, "ip": l.ip_address,
                        "at": str(l.created_at)}
-                      for l in q.offset((page-1)*size).limit(size).all()]}
+                      for l in q.offset((page - 1) * size).limit(size).all()]}
+
 
 # ---------- USER MANAGEMENT (Super Admin) ----------
+class UserCreate(BaseModel):
+    username: str = Field(pattern=r"^[A-Za-z0-9_.\-]{3,50}$")
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=120)
+    full_name: Optional[str] = Field(default=None, max_length=120)
+    role: Literal["SUPER_ADMIN", "BURSARY_ADMIN", "VERIFICATION_OFFICER",
+                  "FINANCE_OFFICER", "REPORTING_OFFICER"] = "BURSARY_ADMIN"
+    password: str = Field(max_length=72)
+
+
 @router.post("/users")
-def create_user(payload: dict, db: Session = Depends(get_db),
+def create_user(payload: UserCreate, db: Session = Depends(get_db),
                 admin=Depends(require_roles("SUPER_ADMIN"))):
-    if db.query(User).filter_by(username=payload["username"]).first():
+    err = validate_password_strength(payload.password, payload.username)
+    if err:
+        raise HTTPException(400, err)
+    if db.query(User).filter(func.lower(User.username) == payload.username.lower()).first():
         raise HTTPException(400, "Username already exists.")
-    u = User(username=payload["username"], email=payload["email"],
-             full_name=payload.get("full_name"), role=payload.get("role", "BURSARY_ADMIN"),
-             password_hash=hash_password(payload["password"]))
+    if db.query(User).filter(func.lower(User.email) == payload.email.lower()).first():
+        raise HTTPException(400, "Email already in use.")
+    u = User(username=payload.username, email=payload.email, full_name=payload.full_name,
+             role=payload.role, password_hash=hash_password(payload.password))
     db.add(u); db.commit()
-    log_action(admin.username, "Admin user created", payload["username"])
+    log_action(admin.username, "Admin user created", payload.username, f"role={payload.role}")
     return {"id": u.id, "username": u.username, "role": u.role}

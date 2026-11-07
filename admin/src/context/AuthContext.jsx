@@ -1,24 +1,33 @@
-import { createContext, useContext, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import api from '../services/api'
 
 const AuthCtx = createContext(null)
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(() => {
-    const raw = localStorage.getItem('admin')
-    return raw ? JSON.parse(raw) : null
-  })
+  const [user, setUser] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  // Ask the server who we are (the cookie is sent automatically).
+  useEffect(() => {
+    let active = true
+    api.get('/admin/me')
+      .then(({ data }) => active && setUser({ username: data.username, role: data.role, full_name: data.full_name }))
+      .catch(() => active && setUser(null))
+      .finally(() => active && setLoading(false))
+    return () => { active = false }
+  }, [])
 
   const login = async (username, password) => {
     const { data } = await api.post('/admin/login', { username, password })
-    const u = { token: data.access_token, role: data.role, full_name: data.full_name }
-    localStorage.setItem('admin', JSON.stringify(u))
-    setUser(u)
+    setUser({ username, role: data.role, full_name: data.full_name })
   }
 
-  const logout = () => { localStorage.removeItem('admin'); setUser(null) }
+  const logout = async () => {
+    try { await api.post('/admin/logout') } catch { /* ignore */ }
+    setUser(null)
+  }
 
-  return <AuthCtx.Provider value={{ user, login, logout }}>{children}</AuthCtx.Provider>
+  return <AuthCtx.Provider value={{ user, loading, login, logout }}>{children}</AuthCtx.Provider>
 }
 
 export const useAuth = () => useContext(AuthCtx)
