@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { accessApplication, uploadSignedForm, uploadDocument, getPdfUrl } from '../services/api'
+import { accessApplication, uploadSignedForm, uploadDocument, downloadPdf } from '../services/api'
 import AllocationNotice from '../components/AllocationNotice'
 
 export default function ContinueApp() {
@@ -34,6 +34,12 @@ export default function ContinueApp() {
     } catch (e) { setError(e.response?.data?.detail || 'Upload failed') }
   }
 
+  const downloadForm = async () => {
+    setError('')
+    try { await downloadPdf(form.application_number, form.access_code) }
+    catch (e) { setError('Could not download the PDF. Please try again.') }
+  }
+
   if (!data) return (
     <div className="card max-w-md mx-auto">
       <h2 className="text-xl font-bold text-brand mb-4">Continue Application</h2>
@@ -64,6 +70,7 @@ export default function ContinueApp() {
           <span className="px-4 py-2 rounded-full text-sm font-bold bg-brand-light text-brand">{data.status}</span>
         </div>
         {msg && <p className="text-green-700 text-sm mt-3">{msg}</p>}
+        {error && <p className="text-red-600 text-sm mt-3">{error}</p>}
 
         {canContinueEditing && (
           <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -102,10 +109,9 @@ export default function ContinueApp() {
 
       <div className="card">
         <h3 className="font-bold text-brand mb-3">Your form</h3>
-        <a className="btn-outline !py-2 !px-4 text-sm" target="_blank" rel="noreferrer"
-          href={getPdfUrl(form.application_number, form.access_code)}>
+        <button type="button" className="btn-outline !py-2 !px-4 text-sm" onClick={downloadForm}>
           Download / Print Application PDF
-        </a>
+        </button>
         <p className="text-sm text-gray-600 mt-3">Print this form and take it to your Religious Leader and Area Chief/Assistant Chief for signing and stamping.</p>
       </div>
 

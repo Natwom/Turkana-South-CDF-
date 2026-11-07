@@ -9,8 +9,10 @@ import Allocations from './pages/Allocations'
 import Reports from './pages/Reports'
 
 function Protected({ children }) {
-  const { user } = useAuth()
-  return user ? children : <Navigate to="/login" />
+  const { user, loading } = useAuth()
+  // Wait for the server to confirm the session cookie before deciding.
+  if (loading) return <div className="min-h-screen flex items-center justify-center text-gray-500">Loading…</div>
+  return user ? children : <Navigate to="/login" replace />
 }
 
 export default function App() {

@@ -1,29 +1,36 @@
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import Optional, List
+
 
 class AdminLogin(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=128)
+    password: str = Field(max_length=128)
+
 
 class StatusUpdate(BaseModel):
-    status: str
-    remarks: Optional[str] = None
-    reason: Optional[str] = None
+    status: str = Field(max_length=50)
+    remarks: Optional[str] = Field(default=None, max_length=1000)
+    reason: Optional[str] = Field(default=None, max_length=1000)
+
 
 class CorrectionRequestIn(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=2000)
+
 
 class VerificationIn(BaseModel):
-    checklist: list[str]
+    checklist: List[str] = Field(max_length=50)
+
 
 class AllocationIn(BaseModel):
-    amount: float
-    remarks: Optional[str] = None
+    amount: float = Field(gt=0, le=100_000_000)
+    remarks: Optional[str] = Field(default=None, max_length=500)
     allow_overfund: bool = False   # Super Admin override
 
-class DisburseIn(BaseModel):                        # ← NEW
-    remarks: Optional[str] = None
+
+class DisburseIn(BaseModel):
+    remarks: Optional[str] = Field(default=None, max_length=500)
+
 
 class NoteIn(BaseModel):
-    note: str
+    note: str = Field(min_length=1, max_length=2000)
     is_student_visible: bool = False

@@ -1,3 +1,4 @@
+import math
 from io import BytesIO
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
@@ -14,10 +15,23 @@ ALLOC_HEADERS = ["Application Number", "Student Name", "Reg/Admission No", "Inst
     "Amount Requested", "Amount Allocated", "Allocation Status", "Allocation Date",
     "Approved By", "Remarks"]
 
+MAX_IMPORT_ROWS = 5000
+
+
+def _append(ws, row):
+    """Append a row, forcing any text that starts with '=' to be stored as plain text
+    so Excel never runs it as a formula (formula injection)."""
+    ws.append(row)
+    for cell in ws[ws.max_row]:
+        if isinstance(cell.value, str) and cell.value.startswith("="):
+            cell.data_type = "s"
+
+
 def _autosize(ws):
     for col in ws.columns:
         width = max(len(str(c.value or "")) for c in col) + 2
         ws.column_dimensions[col[0].column_letter].width = min(width, 45)
+
 
 def export_applications(apps) -> bytes:
     wb = Workbook(); ws = wb.active; ws.title = "Applications"
@@ -25,7 +39,7 @@ def export_applications(apps) -> bytes:
     for c in ws[1]: c.font = Font(bold=True)
     for app in apps:
         a, fam = app.applicant, app.family
-        ws.append([app.application_number, a.full_name if a else "", a.reg_number if a else "",
+        _append(ws, [app.application_number, a.full_name if a else "", a.reg_number if a else "",
             a.id_number if a else "", a.nemis_number if a else "", a.telephone if a else "",
             a.gender if a else "", str(a.dob) if a and a.dob else "",
             a.constituency if a else "", a.ward if a else "", a.location if a else "",
@@ -42,6 +56,7 @@ def export_applications(apps) -> bytes:
     buf = BytesIO(); wb.save(buf); buf.seek(0)
     return buf.read()
 
+
 def export_allocations(apps, period) -> bytes:
     wb = Workbook(); ws = wb.active; ws.title = "Allocations"
     ws.append(ALLOC_HEADERS)
@@ -53,7 +68,7 @@ def export_allocations(apps, period) -> bytes:
         total_req += float(app.amount_requested or 0)
         amt = float(alloc.amount) if alloc else 0
         total_alloc += amt
-        ws.append([app.application_number, a.full_name if a else "", a.reg_number if a else "",
+        _append(ws, [app.application_number, a.full_name if a else "", a.reg_number if a else "",
             a.institution if a else "", a.school_paybill if a else "", a.school_account_number if a else "",
             a.course if a else "", a.level_of_study if a else "",
             a.ward if a else "", app.family_status or "", float(app.amount_requested or 0), amt,
@@ -67,6 +82,7 @@ def export_allocations(apps, period) -> bytes:
     buf = BytesIO(); wb.save(buf); buf.seek(0)
     return buf.read()
 
+
 def allocation_template() -> bytes:
     wb = Workbook(); ws = wb.active; ws.title = "Allocation Template"
     ws.append(["Application Number", "Student Name", "Reg/Admission No", "Institution",
@@ -76,28 +92,37 @@ def allocation_template() -> bytes:
     buf = BytesIO(); wb.save(buf); buf.seek(0)
     return buf.read()
 
+
 def parse_allocation_import(content: bytes):
-    wb = load_workbook(BytesIO(content), data_only=True)
-    ws = wb.active
     errors, rows = [], []
-    headers = [str(c.value).strip() if c.value else "" for c in ws[1]]
-    expected = ["Application Number", "Amount Allocated"]
-    for e in expected:
+    try:
+        wb = load_workbook(BytesIO(content), data_only=True)
+        ws = wb.active
+        headers = [str(c.value).strip() if c.value else "" for c in ws[1]]
+    except Exception:
+        return ["The file is not a valid Excel workbook."], rows
+
+    for e in ["Application Number", "Amount Allocated"]:
         if e not in headers:
             errors.append(f"Missing required column: {e}")
     if errors: return errors, rows
+
     i_app, i_amt = headers.index("Application Number"), headers.index("Amount Allocated")
+    i_rem = headers.index("Remarks") if "Remarks" in headers else None
     seen = set()
     for idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        if idx > MAX_IMPORT_ROWS + 1:
+            errors.append(f"Too many rows (maximum {MAX_IMPORT_ROWS}).")
+            break
         if not row or not row[i_app]: continue
-        app_no = str(row[i_app]).strip()
+        app_no = str(row[i_app]).strip()[:40]
         if app_no in seen: errors.append(f"Row {idx}: duplicate application number {app_no}")
         seen.add(app_no)
         try:
             amt = float(row[i_amt])
-            if amt < 0: raise ValueError
+            if not math.isfinite(amt) or amt < 0: raise ValueError
         except (TypeError, ValueError):
-            errors.append(f"Row {idx}: invalid amount '{row[i_amt]}'"); continue
-        rows.append({"application_number": app_no, "amount": amt,
-                     "remarks": str(row[headers.index("Remarks")] or "") if "Remarks" in headers else ""})
+            errors.append(f"Row {idx}: invalid amount '{str(row[i_amt])[:30]}'"); continue
+        remarks = str(row[i_rem] or "")[:500] if i_rem is not None else ""
+        rows.append({"application_number": app_no, "amount": amt, "remarks": remarks})
     return errors, rows

@@ -1,13 +1,22 @@
+import { useState } from 'react'
 import { useLocation, Link } from 'react-router-dom'
-import { getPdfUrl } from '../services/api'
+import { downloadPdf } from '../services/api'
 
 export default function Confirmation() {
   const { state } = useLocation()
+  const [error, setError] = useState('')
+
   if (!state) return <div className="card text-center"><p>No application data. <Link to="/" className="text-brand underline">Go home</Link></p></div>
+
+  const download = async () => {
+    setError('')
+    try { await downloadPdf(state.application_number, state.access_code) }
+    catch (e) { setError('Could not download the PDF. Please try again.') }
+  }
 
   return (
     <div className="card max-w-lg mx-auto text-center space-y-6">
-      <div className="text-5xl">✅</div>
+      <div className="text-5xl"></div>
       <h2 className="text-2xl font-bold text-brand">APPLICATION SUBMITTED SUCCESSFULLY</h2>
       <div className="bg-brand-light rounded-xl p-6 space-y-2">
         <p className="text-sm text-gray-600">Application Number</p>
@@ -20,9 +29,9 @@ export default function Confirmation() {
         <strong>Keep your Application Number and Access Code safe.</strong> You will need them to
         upload your signed form and track your application. Take a photo or write them down now.
       </div>
+      {error && <p className="text-red-600 text-sm">{error}</p>}
       <div className="flex flex-wrap justify-center gap-3">
-        <a className="btn-primary" target="_blank" rel="noreferrer"
-          href={getPdfUrl(state.application_number, state.access_code)}>Download Application</a>
+        <button type="button" className="btn-primary" onClick={download}>Download Application</button>
         <button className="btn-outline" onClick={() => window.print()}>Print</button>
         <Link to="/continue" className="btn-outline">Upload Signed Form</Link>
       </div>
