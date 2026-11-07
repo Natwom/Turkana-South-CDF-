@@ -25,6 +25,7 @@ const COLUMNS = [
 ]
 
 const PAGE_SIZE = 25
+const FETCH_PER_PAGE = 100   // must be <= the backend's max page size (le=100 in admin.py)
 const FROZEN_COL_WIDTH = 130 // px — frozen "App Number" column
 const CHECK_COL_WIDTH = 44   // px — frozen checkbox column (Super Admin only)
 
@@ -202,6 +203,7 @@ export default function Applications() {
 
   const [allItems, setAllItems] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   const [colFilters, setColFilters] = useState({})
   const [quickSearch, setQuickSearch] = useState('')
   const [sortKey, setSortKey] = useState('date')
@@ -213,11 +215,34 @@ export default function Applications() {
   const [deleting, setDeleting] = useState(false)
   const [result, setResult] = useState(null)
 
-  const load = () => {
+  // Loads every application by requesting pages of FETCH_PER_PAGE (the backend caps size at 100).
+  const load = async () => {
     setLoading(true)
-    api.get('/admin/applications', { params: { size: 1000 } })
-      .then(r => setAllItems(r.data.items || []))
-      .finally(() => setLoading(false))
+    setLoadError('')
+    try {
+      let items = []
+      let pageNo = 1
+      let total = 0
+      do {
+        const { data } = await api.get('/admin/applications', {
+          params: { size: FETCH_PER_PAGE, page: pageNo },
+        })
+        const batch = data.items || []
+        items = items.concat(batch)
+        total = data.total || 0
+        if (batch.length === 0) break
+        pageNo += 1
+      } while (items.length < total && pageNo <= 100)
+      setAllItems(items)
+    } catch (e) {
+      const d = e.response?.data?.detail
+      setLoadError(
+        (Array.isArray(d) ? d.map(x => x.msg).join('; ') : d) ||
+        e.message || 'Failed to load applications.'
+      )
+    } finally {
+      setLoading(false)
+    }
   }
   useEffect(() => { load() }, [])
 
@@ -360,6 +385,14 @@ export default function Applications() {
           </button>
         </div>
       </div>
+
+      {/* Load error */}
+      {loadError && (
+        <div className="rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 flex justify-between gap-4">
+          <span><strong>Could not load applications:</strong> {loadError}</span>
+          <button className="underline shrink-0" onClick={load}>Retry</button>
+        </div>
+      )}
 
       {/* Result of the last bulk delete */}
       {result && (
@@ -551,7 +584,9 @@ export default function Applications() {
             </tbody>
           </table>
         </div>
-        {!loading && sorted.length === 0 && <p className="text-center text-gray-500 py-10">No applications match the current filters.</p>}
+        {!loading && !loadError && sorted.length === 0 && (
+          <p className="text-center text-gray-500 py-10">No applications match the current filters.</p>
+        )}
       </div>
 
       {/* Pagination */}
