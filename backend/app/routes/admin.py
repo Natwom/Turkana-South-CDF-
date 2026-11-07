@@ -22,7 +22,7 @@ from ..models.user import User
 from ..repositories.application_repo import to_public_dict
 from ..schemas.admin import (AdminLogin, AllocationIn, CorrectionRequestIn, DisburseIn, NoteIn,
                              StatusUpdate, VerificationIn)
-from ..services import excel_service
+from ..services import excel_service, notify
 from ..services.pdf_service import generate_application_pdf
 from ..services.status import transition
 
@@ -45,6 +45,7 @@ def _like(term: str) -> str:
 def login(request: Request, response: Response, payload: AdminLogin, db: Session = Depends(get_db)):
     check_csrf(request)
     ip = client_ip(request)
+    ua = request.headers.get("user-agent", "")[:200]
     ident = (payload.username or "").strip().lower()[:128]
     pairs = [(login_by_ip_user, f"{ip}|{ident}"), (login_by_user, ident), (login_by_ip, ip)]
     ensure_not_locked(*pairs)
@@ -57,6 +58,10 @@ def login(request: Request, response: Response, payload: AdminLogin, db: Session
     if not ok:
         register_failures(*pairs)
         log_action(ident or "unknown", "Admin login FAILED")
+        known = user.username if user else None
+        notify.login_failed(known, ip, ua)
+        if login_by_ip_user.locked_for(pairs[0][1]):
+            notify.login_locked(known, ip)
         raise HTTPException(401, "Invalid credentials.")
     if not user.is_active:
         raise HTTPException(403, "Account disabled.")
@@ -65,6 +70,7 @@ def login(request: Request, response: Response, payload: AdminLogin, db: Session
     user.last_login = datetime.now(timezone.utc)
     db.commit()
     log_action(user.username, "Admin login")
+    notify.login_success(user.username, user.role, ip, ua)
 
     token = create_token({"sub": str(user.id), "role": user.role})
     response.set_cookie(settings.COOKIE_NAME, token,

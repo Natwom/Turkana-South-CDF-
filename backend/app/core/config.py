@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "sqlite:///./bursary.db"
     # REQUIRED in production: at least 32 random characters.
-    #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+    #   python3 -c "import secrets; print(secrets.token_urlsafe(48))"
     SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 120
@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     INITIAL_ADMIN_USERNAME: str = "superadmin"
     INITIAL_ADMIN_EMAIL: str = "admin@turkanasouth.go.ke"
     INITIAL_ADMIN_PASSWORD: Optional[str] = None
+    # One-time password reset for INITIAL_ADMIN_USERNAME. Remove after use.
+    RESET_ADMIN_PASSWORD: Optional[str] = None
+
+    # Login alert emails (sent over HTTPS because Render free blocks SMTP)
+    RESEND_API_KEY: Optional[str] = None
+    ALERT_EMAIL_TO: Optional[str] = None      # your email, comma-separate for several
+    ALERT_EMAIL_FROM: str = "onboarding@resend.dev"
+    ALERT_ON_SUCCESS: bool = True
 
     @property
     def is_production(self) -> bool:
