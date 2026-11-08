@@ -1,17 +1,28 @@
 import { Link } from 'react-router-dom'
 
+// ── Edit these two lines when the deadline or support number changes ──
+const DEADLINE = '31 October 2026'
+const SUPPORT_PHONE = '0703 779 444'
+const SUPPORT_PHONE_LINK = 'tel:0703779444'
+
 export default function Landing() {
   return (
     <div className="space-y-8">
       <section className="card text-center py-12">
         <h2 className="text-3xl font-bold text-brand mb-3">Bursary Application — FY 2026/2027</h2>
-        <p className="text-gray-600 max-w-2xl mx-auto mb-2">
+        <p className="text-gray-600 max-w-2xl mx-auto mb-4">
           The bursary application period is <strong>open</strong>. Apply online, upload your
           documents, and receive your Application Number and Access Code instantly.
         </p>
-        <p className="text-sm text-red-600 font-semibold mb-2">Deadline: 31 October 2026</p>
+
+        <div className="inline-block bg-red-50 border border-red-200 rounded-xl px-5 py-3 mb-4">
+          <p className="text-xs uppercase tracking-wide text-red-500 font-semibold">Application Deadline</p>
+          <p className="text-xl font-bold text-red-700">{DEADLINE}</p>
+        </div>
+
         <p className="text-sm text-gray-500 mb-8">
-          Need help? Call the NG-CDF Turkana South office: <strong className="text-brand">0716 889 657</strong>
+          Need help? Call the NG-CDF Turkana South office:{' '}
+          <a href={SUPPORT_PHONE_LINK} className="font-bold text-brand hover:underline">{SUPPORT_PHONE}</a>
         </p>
         <div className="flex flex-wrap justify-center gap-4">
           <Link to="/apply" className="btn-primary">Start Application</Link>
@@ -56,7 +67,8 @@ export default function Landing() {
       </section>
 
       <section className="text-center text-sm text-gray-500">
-        For any assistance, contact the Turkana South NG-CDF office on <strong className="text-brand">0716 889 657</strong>.
+        For any assistance, contact the Turkana South NG-CDF office on{' '}
+        <a href={SUPPORT_PHONE_LINK} className="font-bold text-brand hover:underline">{SUPPORT_PHONE}</a>.
       </section>
     </div>
   )
