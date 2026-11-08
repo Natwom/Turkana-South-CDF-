@@ -17,6 +17,15 @@ const STATUS_STYLES = {
   'Disbursed': 'bg-green-600 text-white border-green-700',
 }
 
+function Spinner({ className = 'w-4 h-4' }) {
+  return (
+    <svg className={`animate-spin ${className}`} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
+      <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round" className="opacity-90" />
+    </svg>
+  )
+}
+
 function SectionCard({ number, title, subtitle, children }) {
   return (
     <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
@@ -55,33 +64,65 @@ export default function ContinueApp() {
   const [error, setError] = useState('')
   const [file, setFile] = useState(null)
   const [msg, setMsg] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [accessing, setAccessing] = useState(false)   // loading state for the access form
+  const [uploading, setUploading] = useState(false)   // loading state for uploads
   const navigate = useNavigate()
 
+  const canSubmit = form.application_number.trim() && form.access_code.trim()
+
   const load = async () => {
-    setError(''); setMsg(''); setBusy(true)
+    if (accessing) return
+    if (!canSubmit) {
+      setError('Please enter both your Application Number and Access Code.')
+      return
+    }
+    setError(''); setMsg(''); setAccessing(true)
     try {
-      const { data } = await accessApplication(form.application_number, form.access_code)
+      const { data } = await accessApplication(form.application_number.trim(), form.access_code.trim())
       setData(data)
-    } catch (e) { setError(e.response?.data?.detail || 'Access failed') }
-    finally { setBusy(false) }
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Access failed. Please check your details and try again.')
+    } finally {
+      setAccessing(false)
+    }
+  }
+
+  // Quietly re-fetch the application after an upload (keeps the page, no full-screen loader)
+  const refresh = async () => {
+    try {
+      const { data } = await accessApplication(form.application_number.trim(), form.access_code.trim())
+      setData(data)
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Could not refresh your application.')
+    }
   }
 
   const uploadSigned = async () => {
-    if (!file) return
-    setBusy(true)
+    if (!file || uploading) return
+    setError(''); setMsg(''); setUploading(true)
     try {
       const { data } = await uploadSignedForm(form.application_number, form.access_code, file)
-      setMsg(data.message); setFile(null); load()
-    } catch (e) { setError(e.response?.data?.detail || 'Upload failed'); setBusy(false) }
+      setMsg(data.message); setFile(null)
+      await refresh()
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Upload failed')
+    } finally {
+      setUploading(false)
+    }
   }
 
   const uploadDoc = async (doc_type, f) => {
-    if (!f) return
+    if (!f || uploading) return
+    setError(''); setMsg(''); setUploading(true)
     try {
       await uploadDocument(form.application_number, form.access_code, doc_type, f)
-      setMsg('Document uploaded.'); load()
-    } catch (e) { setError(e.response?.data?.detail || 'Upload failed') }
+      setMsg('Document uploaded.')
+      await refresh()
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Upload failed')
+    } finally {
+      setUploading(false)
+    }
   }
 
   const downloadForm = async () => {
@@ -113,7 +154,7 @@ export default function ContinueApp() {
         </ul>
       </div>
 
-      <div className="lg:col-span-3 rounded-2xl border border-gray-200 bg-white p-6 md:p-8 shadow-sm">
+      <div className="relative lg:col-span-3 overflow-hidden rounded-2xl border border-gray-200 bg-white p-6 md:p-8 shadow-sm">
         <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500 mb-5">Access application</h3>
 
         {error && <div className="mb-5"><Notice tone="error">{error}</Notice></div>}
@@ -122,9 +163,10 @@ export default function ContinueApp() {
           <div>
             <label className="mb-1.5 block text-sm font-semibold text-gray-700">Application Number</label>
             <input
-              className="input font-mono"
+              className="input font-mono disabled:bg-gray-100 disabled:cursor-not-allowed"
               placeholder="TSB-2026-000001"
               value={form.application_number}
+              disabled={accessing}
               onChange={e => setForm({ ...form, application_number: e.target.value.toUpperCase() })}
               onKeyDown={e => e.key === 'Enter' && load()}
             />
@@ -132,17 +174,36 @@ export default function ContinueApp() {
           <div>
             <label className="mb-1.5 block text-sm font-semibold text-gray-700">Access Code</label>
             <input
-              className="input font-mono"
+              className="input font-mono disabled:bg-gray-100 disabled:cursor-not-allowed"
               placeholder="Enter your access code"
               value={form.access_code}
+              disabled={accessing}
               onChange={e => setForm({ ...form, access_code: e.target.value.toUpperCase() })}
               onKeyDown={e => e.key === 'Enter' && load()}
             />
           </div>
-          <button className="btn-primary w-full disabled:opacity-60" onClick={load} disabled={busy}>
-            {busy ? 'Checking…' : 'Access Application'}
+          <button
+            className="btn-primary w-full inline-flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+            onClick={load}
+            disabled={accessing}
+          >
+            {accessing && <Spinner />}
+            {accessing ? 'Loading your application…' : 'Access Application'}
           </button>
         </div>
+
+        {/* Loading overlay */}
+        {accessing && (
+          <div
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white/85 backdrop-blur-[1px]"
+            role="status"
+            aria-live="polite"
+          >
+            <Spinner className="w-10 h-10 text-brand" />
+            <p className="mt-4 font-semibold text-gray-800">Verifying your details…</p>
+            <p className="mt-1 text-xs text-gray-500">Please wait while we load your application</p>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -219,9 +280,12 @@ export default function ContinueApp() {
               </li>
             ))}
           </ul>
-          <label className="mt-4 inline-block cursor-pointer rounded-xl border border-amber-400 bg-white px-4 py-2 text-sm font-semibold text-amber-900 transition hover:bg-amber-100">
-            Upload corrected document
-            <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png"
+          <label className={`mt-4 inline-flex items-center gap-2 rounded-xl border border-amber-400 bg-white px-4 py-2 text-sm font-semibold text-amber-900 transition ${
+            uploading ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-amber-100'
+          }`}>
+            {uploading && <Spinner />}
+            {uploading ? 'Uploading…' : 'Upload corrected document'}
+            <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png" disabled={uploading}
               onChange={e => uploadDoc('correction', e.target.files[0])} />
           </label>
         </div>
@@ -262,11 +326,16 @@ export default function ContinueApp() {
                 {file ? file.name : 'Click to choose the signed form'}
               </span>
               <span className="mt-1 text-xs text-gray-500">PDF, JPG, JPEG or PNG</span>
-              <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png"
+              <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png" disabled={uploading}
                 onChange={e => setFile(e.target.files[0] || null)} />
             </label>
-            <button className="btn-primary !py-2 disabled:opacity-50" disabled={!file || busy} onClick={uploadSigned}>
-              {busy ? 'Uploading…' : 'Upload Signed Form'}
+            <button
+              className="btn-primary !py-2 inline-flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+              disabled={!file || uploading}
+              onClick={uploadSigned}
+            >
+              {uploading && <Spinner />}
+              {uploading ? 'Uploading…' : 'Upload Signed Form'}
             </button>
           </div>
         ) : (
