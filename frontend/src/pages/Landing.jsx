@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 
-// ── Edit these two lines when the deadline or support number changes ──
-const DEADLINE = '31 October 2026'
+// ── Edit these lines when the deadline or support number changes ──
+const DEADLINE = '10 December 2026'
 const SUPPORT_PHONE = '0703 779 444'
 const SUPPORT_PHONE_LINK = 'tel:0703779444'
 
