@@ -1,10 +1,12 @@
 import { Link } from 'react-router-dom'
 
-// ── Edit these lines when the deadline or support number changes ──
+// ── Edit these lines when the deadline or support numbers change ──
 const DEADLINE_LABEL = '10 December 2026'
 const DEADLINE_DATE = new Date('2026-12-10T23:59:59+03:00') // East Africa Time
 const SUPPORT_PHONE = '0703 779 444'
 const SUPPORT_PHONE_LINK = 'tel:0703779444'
+const SUPPORT_PHONE_2 = '0180 785 456'
+const SUPPORT_PHONE_2_LINK = 'tel:0180785456'
 
 const STEPS = [
   { title: 'Fill the online form', text: 'Enter your personal, family and institution details.' },
@@ -113,8 +115,9 @@ export default function Landing() {
             </div>
             <div>
               <dt className="text-xs uppercase tracking-wide text-gray-500">Support</dt>
-              <dd className="mt-1 text-lg font-bold">
-                <a href={SUPPORT_PHONE_LINK} className="text-brand hover:underline">{SUPPORT_PHONE}</a>
+              <dd className="mt-1 text-2xl md:text-3xl font-extrabold leading-tight">
+                <a href={SUPPORT_PHONE_LINK} className="block text-brand hover:underline">{SUPPORT_PHONE}</a>
+                <a href={SUPPORT_PHONE_2_LINK} className="block text-brand hover:underline">{SUPPORT_PHONE_2}</a>
               </dd>
             </div>
           </dl>
@@ -194,8 +197,11 @@ export default function Landing() {
           <p className="mt-2 text-sm text-gray-600">
             Call the NG-CDF Turkana South office during working hours.
           </p>
-          <a href={SUPPORT_PHONE_LINK} className="mt-3 inline-block text-2xl font-bold text-brand hover:underline">
+          <a href={SUPPORT_PHONE_LINK} className="mt-3 block text-3xl md:text-4xl font-extrabold text-brand hover:underline">
             {SUPPORT_PHONE}
+          </a>
+          <a href={SUPPORT_PHONE_2_LINK} className="mt-1 block text-3xl md:text-4xl font-extrabold text-brand hover:underline">
+            {SUPPORT_PHONE_2}
           </a>
         </div>
       </section>
