@@ -14,7 +14,7 @@ class Application(Base):
     amount_requested = Column(Numeric(12, 2))
     family_status = Column(String(40))
     family_status_other = Column(Text)
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now(), index=True)
     submitted_at = Column(DateTime)
     signed_form_uploaded_at = Column(DateTime)
 
@@ -74,7 +74,7 @@ class FamilyDetail(Base):
 class Guardian(Base):
     __tablename__ = "guardians"
     id = Column(Integer, primary_key=True)
-    family_id = Column(Integer, ForeignKey("family_details.id"))
+    family_id = Column(Integer, ForeignKey("family_details.id"), index=True)
     relation = Column(String(10))                       # Father / Mother
     name = Column(String(120))
     occupation = Column(String(80))
@@ -87,7 +87,7 @@ class Guardian(Base):
 class Sibling(Base):
     __tablename__ = "siblings"
     id = Column(Integer, primary_key=True)
-    application_id = Column(Integer, ForeignKey("applications.id"))
+    application_id = Column(Integer, ForeignKey("applications.id"), index=True)
     name = Column(String(120))
     relation_type = Column(String(40))
     school = Column(String(150))
@@ -99,7 +99,7 @@ class Sibling(Base):
 class EducationFunding(Base):
     __tablename__ = "education_funding"
     id = Column(Integer, primary_key=True)
-    application_id = Column(Integer, ForeignKey("applications.id"))
+    application_id = Column(Integer, ForeignKey("applications.id"), index=True)
     level = Column(String(20))                          # Secondary/College/University
     funding_source = Column(String(120))
     other_source = Column(String(120))
@@ -108,7 +108,7 @@ class EducationFunding(Base):
 class Document(Base):
     __tablename__ = "documents"
     id = Column(Integer, primary_key=True)
-    application_id = Column(Integer, ForeignKey("applications.id"))
+    application_id = Column(Integer, ForeignKey("applications.id"), index=True)
     doc_type = Column(String(60))                       # e.g. id_card, admission_letter, signed_form
     file_path = Column(String(300), nullable=False)
     original_name = Column(String(200))
@@ -132,7 +132,7 @@ class StatusHistory(Base):
 class CorrectionRequest(Base):
     __tablename__ = "correction_requests"
     id = Column(Integer, primary_key=True)
-    application_id = Column(Integer, ForeignKey("applications.id"))
+    application_id = Column(Integer, ForeignKey("applications.id"), index=True)
     message = Column(Text, nullable=False)
     is_resolved = Column(Boolean, default=False)
     requested_by = Column(String(80))
@@ -143,7 +143,7 @@ class CorrectionRequest(Base):
 class VerificationRecord(Base):
     __tablename__ = "verification_records"
     id = Column(Integer, primary_key=True)
-    application_id = Column(Integer, ForeignKey("applications.id"))
+    application_id = Column(Integer, ForeignKey("applications.id"), index=True)
     checklist = Column(String(500))                     # JSON array of checked items
     verified_by = Column(String(80))
     created_at = Column(DateTime, server_default=func.now())
@@ -151,7 +151,7 @@ class VerificationRecord(Base):
 class AdminNote(Base):
     __tablename__ = "admin_notes"
     id = Column(Integer, primary_key=True)
-    application_id = Column(Integer, ForeignKey("applications.id"))
+    application_id = Column(Integer, ForeignKey("applications.id"), index=True)
     note = Column(Text, nullable=False)
     is_student_visible = Column(Boolean, default=False)
     created_by = Column(String(80))
@@ -185,7 +185,7 @@ class AllocationHistory(Base):
 class Notification(Base):
     __tablename__ = "notifications"
     id = Column(Integer, primary_key=True)
-    application_id = Column(Integer, ForeignKey("applications.id"), nullable=True)
+    application_id = Column(Integer, ForeignKey("applications.id"), nullable=True, index=True)
     audience = Column(String(10), default="ADMIN")      # STUDENT / ADMIN
     title = Column(String(120))
     message = Column(Text)

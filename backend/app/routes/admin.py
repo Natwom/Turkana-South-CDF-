@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFil
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, contains_eager, selectinload
 
 from ..core.config import settings
 from ..core.security import (DUMMY_HASH, check_csrf, create_token, get_current_admin, hash_password,
@@ -15,11 +15,12 @@ from ..database import get_db
 from ..middleware.audit import log_action
 from ..middleware.rate_limit import (client_ip, ensure_not_locked, limiter, login_by_ip,
                                      login_by_ip_user, login_by_user, register_failures)
-from ..models.application import (AdminNote, Allocation, AllocationHistory, Application, AuditLog,
-                                  CorrectionRequest, Document, Notification, VerificationRecord)
+from ..models.application import (AdminNote, Allocation, AllocationHistory, ApplicantDetail, Application,
+                                  AuditLog, CorrectionRequest, Document, FamilyDetail, Notification,
+                                  VerificationRecord)
 from ..models.funding import FundingPeriod
 from ..models.user import User
-from ..repositories.application_repo import to_public_dict
+from ..repositories.application_repo import to_list_dict, to_public_dict
 from ..schemas.admin import (AdminLogin, AllocationIn, CorrectionRequestIn, DisburseIn, NoteIn,
                              StatusUpdate, VerificationIn)
 from ..services import excel_service, notify
@@ -37,6 +38,21 @@ def _like(term: str) -> str:
     """Escape LIKE wildcards so users can't craft expensive patterns."""
     esc = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{esc}%"
+
+
+def _related_options():
+    """Eager-load every relationship that to_public_dict() touches.
+    This turns ~10 lazy queries PER application into ~8 queries in TOTAL."""
+    return [
+        selectinload(Application.family).selectinload(FamilyDetail.father),
+        selectinload(Application.family).selectinload(FamilyDetail.mother),
+        selectinload(Application.siblings),
+        selectinload(Application.funding_history),
+        selectinload(Application.documents),
+        selectinload(Application.allocation),
+        selectinload(Application.corrections),
+        selectinload(Application.status_history),
+    ]
 
 
 # ---------- AUTH ----------
@@ -119,15 +135,20 @@ def change_password(request: Request, payload: PasswordChangeIn, db: Session = D
 # ---------- DASHBOARD ----------
 @router.get("/dashboard")
 def dashboard(db: Session = Depends(get_db), admin=Depends(get_current_admin)):
-    def cnt(status): return db.query(Application).filter_by(status=status).count()
-    total = db.query(Application).count()
+    # ONE grouped query instead of 12+ separate COUNT queries.
+    status_counts = dict(db.query(Application.status, func.count())
+                         .group_by(Application.status).all())
+
+    def cnt(status): return status_counts.get(status, 0)
+
+    total = sum(status_counts.values())
     requested = db.query(func.coalesce(func.sum(Application.amount_requested), 0)).scalar()
     allocated = db.query(func.coalesce(func.sum(Allocation.amount), 0)).scalar()
     period = db.query(FundingPeriod).filter_by(is_active=True).first()
     fund = float(period.total_fund) if period else 0
-    by_ward_rows = (db.query(Application.applicant.property.mapper.class_.ward, func.count())
-                    .join(Application.applicant)
-                    .group_by(Application.applicant.property.mapper.class_.ward).all())
+    by_ward_rows = (db.query(ApplicantDetail.ward, func.count())
+                    .join(Application, Application.id == ApplicantDetail.application_id)
+                    .group_by(ApplicantDetail.ward).all())
     return {"total_applications": total,
             "drafts": cnt("Draft"), "submitted": cnt("Submitted"),
             "awaiting_verification": cnt("Awaiting Physical Verification"),
@@ -148,10 +169,11 @@ def list_applications(status: Optional[str] = Query(None, max_length=50),
                       institution: Optional[str] = Query(None, max_length=100),
                       search: Optional[str] = Query(None, max_length=100),
                       sort: str = Query("newest", max_length=20),
-                      page: int = Query(1, ge=1, le=100000), size: int = Query(25, ge=1, le=100),
+                      compact: bool = Query(False, description="Lightweight rows for table views"),
+                      page: int = Query(1, ge=1, le=100000), size: int = Query(25, ge=1, le=1000),
                       db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    A = ApplicantDetail
     q = db.query(Application).join(Application.applicant)
-    A = Application.applicant.property.mapper.class_
     if status: q = q.filter(Application.status == status)
     if ward: q = q.filter(A.ward == ward)
     if institution: q = q.filter(A.institution.ilike(_like(institution), escape="\\"))
@@ -160,12 +182,25 @@ def list_applications(status: Optional[str] = Query(None, max_length=50),
         q = q.filter(or_(Application.application_number.ilike(like, escape="\\"),
                          A.full_name.ilike(like, escape="\\"), A.reg_number.ilike(like, escape="\\"),
                          A.id_number.ilike(like, escape="\\")))
+
+    total = q.count()  # count BEFORE adding ordering / eager-load options
+
     sort_map = {"newest": Application.created_at.desc(), "oldest": Application.created_at.asc(),
                 "highest_request": Application.amount_requested.desc(),
                 "lowest_request": Application.amount_requested.asc()}
     q = q.order_by(sort_map.get(sort, sort_map["newest"]))
-    total = q.count()
+
+    # The applicant is already JOINed above, so reuse that join instead of lazy-loading it.
+    if compact:
+        q = q.options(contains_eager(Application.applicant),
+                      selectinload(Application.allocation))
+    else:
+        q = q.options(contains_eager(Application.applicant), *_related_options())
+
     items = q.offset((page - 1) * size).limit(size).all()
+
+    if compact:
+        return {"total": total, "page": page, "items": [to_list_dict(a) for a in items]}
     return {"total": total, "page": page,
             "items": [{**to_public_dict(a), "access_code": None} for a in items]}
 
@@ -173,7 +208,8 @@ def list_applications(status: Optional[str] = Query(None, max_length=50),
 @router.get("/applications/{app_id}")
 def get_application(app_id: int, db: Session = Depends(get_db),
                     admin=Depends(get_current_admin)):
-    app = db.get(Application, app_id)
+    app = db.get(Application, app_id,
+                 options=[selectinload(Application.applicant), *_related_options()])
     if not app: raise HTTPException(404, "Application not found.")
     data = to_public_dict(app)
     data["access_code"] = None  # staff must never see the applicant's access code
@@ -439,7 +475,10 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 @limiter.limit("10/hour")
 def export_applications(request: Request, db: Session = Depends(get_db),
                         admin=Depends(require_roles("REPORTING_OFFICER", "BURSARY_ADMIN"))):
-    data = excel_service.export_applications(db.query(Application).all())
+    apps = (db.query(Application)
+            .options(selectinload(Application.applicant), *_related_options())
+            .all())
+    data = excel_service.export_applications(apps)
     log_action(admin.username, "Excel exported", "applications")
     return Response(data, media_type=XLSX,
                     headers={"Content-Disposition":
@@ -451,7 +490,10 @@ def export_applications(request: Request, db: Session = Depends(get_db),
 def export_allocations(request: Request, db: Session = Depends(get_db),
                        admin=Depends(require_roles("FINANCE_OFFICER", "REPORTING_OFFICER"))):
     period = db.query(FundingPeriod).filter_by(is_active=True).first()
-    data = excel_service.export_allocations(db.query(Application).all(), period)
+    apps = (db.query(Application)
+            .options(selectinload(Application.applicant), *_related_options())
+            .all())
+    data = excel_service.export_allocations(apps, period)
     log_action(admin.username, "Excel exported", "allocations")
     return Response(data, media_type=XLSX,
                     headers={"Content-Disposition":

@@ -21,11 +21,11 @@ const COLUMNS = [
   { key: 'ward', label: 'Ward', type: 'list', get: a => a.applicant?.ward || '' },
   { key: 'amount_requested', label: 'Requested (KSh)', type: 'numeric', get: a => Number(a.amount_requested || 0) },
   { key: 'status', label: 'Status', type: 'list', get: a => a.status || '' },
-  { key: 'date', label: 'Date', type: 'text', get: a => a.status_history?.[0]?.created_at?.slice(0, 10) || '' },
+  { key: 'date', label: 'Date', type: 'text', get: a => a.created_at?.slice(0, 10) || '' },
 ]
 
 const PAGE_SIZE = 25
-const FETCH_PER_PAGE = 100   // must be <= the backend's max page size (le=100 in admin.py)
+const FETCH_PER_PAGE = 1000  // must be <= the backend's max page size (le=1000 in admin.py)
 const FROZEN_COL_WIDTH = 130 // px — frozen "App Number" column
 const CHECK_COL_WIDTH = 44   // px — frozen checkbox column (Super Admin only)
 
@@ -180,12 +180,23 @@ function BulkDeleteModal({ items, busy, onCancel, onConfirm }) {
 }
 
 function Skeleton() {
+  // Render's free tier sleeps when idle; after a few seconds, tell the user why it's slow.
+  const [slow, setSlow] = useState(false)
+  useEffect(() => {
+    const t = setTimeout(() => setSlow(true), 6000)
+    return () => clearTimeout(t)
+  }, [])
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col items-center justify-center py-10">
         <div className="w-10 h-10 border-4 border-brand/20 border-t-brand rounded-full animate-spin mb-4" />
         <p className="text-gray-600 font-medium">Loading applications…</p>
-        <p className="text-xs text-gray-400 mt-1">Fetching the latest data from the server</p>
+        <p className="text-xs text-gray-400 mt-1">
+          {slow
+            ? 'The server is waking up after being idle — this can take up to a minute the first time.'
+            : 'Fetching the latest data from the server'}
+        </p>
       </div>
       <div className="animate-pulse space-y-4">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -215,7 +226,8 @@ export default function Applications() {
   const [deleting, setDeleting] = useState(false)
   const [result, setResult] = useState(null)
 
-  // Loads every application by requesting pages of FETCH_PER_PAGE (the backend caps size at 100).
+  // Loads every application using the COMPACT list format (only the fields the table needs).
+  // With up to FETCH_PER_PAGE rows per request this is normally a single request.
   const load = async () => {
     setLoading(true)
     setLoadError('')
@@ -225,7 +237,7 @@ export default function Applications() {
       let total = 0
       do {
         const { data } = await api.get('/admin/applications', {
-          params: { size: FETCH_PER_PAGE, page: pageNo },
+          params: { size: FETCH_PER_PAGE, page: pageNo, compact: true },
         })
         const batch = data.items || []
         items = items.concat(batch)
@@ -246,10 +258,14 @@ export default function Applications() {
   }
   useEffect(() => { load() }, [])
 
-  const columnValues = key => {
-    const col = COLUMNS.find(c => c.key === key)
-    return [...new Set(allItems.map(col.get))].sort()
-  }
+  // Computed ONCE per data change (previously recomputed for every column on every render).
+  const columnValues = useMemo(() => {
+    const out = {}
+    for (const col of COLUMNS) {
+      out[col.key] = [...new Set(allItems.map(col.get))].sort()
+    }
+    return out
+  }, [allItems])
 
   const setColFilter = (key, value) => {
     setColFilters(prev => {
@@ -512,7 +528,7 @@ export default function Applications() {
                   </span>
                   <ColumnFilterButton
                     col={COLUMNS[0]}
-                    values={columnValues('application_number')}
+                    values={columnValues['application_number'] || []}
                     active={colFilters['application_number'] || {}}
                     onChange={setColFilter}
                   />
@@ -528,7 +544,7 @@ export default function Applications() {
                     </span>
                     <ColumnFilterButton
                       col={col}
-                      values={columnValues(col.key)}
+                      values={columnValues[col.key] || []}
                       active={colFilters[col.key] || {}}
                       onChange={setColFilter}
                     />
@@ -567,7 +583,7 @@ export default function Applications() {
                       <span className={`badge ${STATUS_COLORS[a.status] || 'bg-gray-100'}`}>{a.status}</span>
                     </td>
                     <td className="px-4 py-3 text-gray-500 text-xs border-b border-gray-100">
-                      {a.status_history?.[0]?.created_at?.slice(0, 10)}
+                      {a.created_at?.slice(0, 10)}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap border-b border-gray-100">
                       <Link to={`/applications/${a.id}`} className="text-brand font-semibold hover:underline mr-3">View</Link>

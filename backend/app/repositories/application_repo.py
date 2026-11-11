@@ -98,6 +98,26 @@ def update_application(db: Session, app: Application, data: ApplicationCreate) -
     db.commit(); db.refresh(app)
     return app
 
+def to_list_dict(app: Application) -> dict:
+    """Lightweight serializer for the admin applications TABLE.
+    Only the fields the table (and the bulk-delete warning) actually use, so it
+    needs just the applicant + allocation relationships — no lazy-load storm."""
+    a = app.applicant
+    return {
+        "id": app.id,
+        "application_number": app.application_number,
+        "status": app.status,
+        "category": app.category,
+        "amount_requested": str(app.amount_requested or ""),
+        "created_at": str(app.created_at or ""),
+        "submitted_at": str(app.submitted_at or ""),
+        "applicant": {
+            "full_name": a.full_name, "institution": a.institution, "ward": a.ward,
+            "reg_number": a.reg_number, "id_number": a.id_number,
+        } if a else None,
+        "allocation": {"amount": float(app.allocation.amount)} if app.allocation else None,
+    }
+
 def to_public_dict(app: Application) -> dict:
     a, fam = app.applicant, app.family
     return {
