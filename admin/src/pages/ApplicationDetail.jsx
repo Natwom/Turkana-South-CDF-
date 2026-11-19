@@ -7,6 +7,10 @@ const CHECKLIST = ['Application information checked', 'Academic documents checke
   'Admission letter checked', 'Fee structure checked', 'Fee balance checked',
   'Parent/guardian information checked', 'Signed/stamped form checked', 'Recommendation checked']
 
+const Spinner = () => (
+  <span className="inline-block w-3 h-3 mr-1.5 align-[-2px] border-2 border-current border-t-transparent rounded-full animate-spin" />
+)
+
 export default function ApplicationDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -21,6 +25,8 @@ export default function ApplicationDetail() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmText, setConfirmText] = useState('')
   const [deleting, setDeleting] = useState(false)
+  // Tracks which downloads are in progress, keyed by 'pdf' or 'doc-<id>'
+  const [downloading, setDownloading] = useState({})
 
   const load = () => api.get(`/admin/applications/${id}`).then(r => setApp(r.data))
   useEffect(() => { load() }, [id])
@@ -28,6 +34,22 @@ export default function ApplicationDetail() {
   if (!app) return <p>Loading…</p>
   const refresh = (r) => { setMsg(r.data.status || 'Done'); load() }
   const err = (e) => setMsg(e.response?.data?.detail || 'Error')
+
+  const handleDownload = async (key, url, filename) => {
+    if (downloading[key]) return
+    setDownloading(prev => ({ ...prev, [key]: true }))
+    try {
+      await downloadFile(url, filename)
+    } catch (e) {
+      setMsg(e.response?.data?.detail || 'Download failed')
+    } finally {
+      setDownloading(prev => {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+    }
+  }
 
   const act = {
     approve: () => api.patch(`/admin/applications/${id}/status`, { status: 'Approved' }).then(refresh).catch(err),
@@ -122,13 +144,29 @@ export default function ApplicationDetail() {
 
         {sec('Documents', <>
           {app.documents?.length === 0 && <p className="text-sm text-gray-500">No documents.</p>}
-          {app.documents?.map(d => (
-            <div key={d.id} className="flex items-center justify-between text-sm py-1.5 border-b">
-              <span>{d.original_name} <span className="text-xs text-gray-400">({d.doc_type}{d.is_signed_form ? ', SIGNED' : ''})</span></span>
-              <button className="text-brand font-semibold" onClick={() => downloadFile(`/documents/${d.id}`, d.original_name)}>Download</button>
-            </div>
-          ))}
-          <button className="btn-outline mt-3 inline-block" onClick={() => downloadFile(`/admin/applications/${id}/pdf`, `${app.application_number}.pdf`)}>Download Generated PDF</button>
+          {app.documents?.map(d => {
+            const key = `doc-${d.id}`
+            const busy = !!downloading[key]
+            return (
+              <div key={d.id} className="flex items-center justify-between text-sm py-1.5 border-b">
+                <span>{d.original_name} <span className="text-xs text-gray-400">({d.doc_type}{d.is_signed_form ? ', SIGNED' : ''})</span></span>
+                <button
+                  className="text-brand font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                  disabled={busy}
+                  onClick={() => handleDownload(key, `/documents/${d.id}`, d.original_name)}
+                >
+                  {busy ? <><Spinner />Downloading…</> : 'Download'}
+                </button>
+              </div>
+            )
+          })}
+          <button
+            className="btn-outline mt-3 inline-block disabled:opacity-60 disabled:cursor-not-allowed"
+            disabled={!!downloading.pdf}
+            onClick={() => handleDownload('pdf', `/admin/applications/${id}/pdf`, `${app.application_number}.pdf`)}
+          >
+            {downloading.pdf ? <><Spinner />Downloading…</> : 'Download Generated PDF'}
+          </button>
         </>)}
 
         {sec('Admin Actions', <div className="space-y-4">
