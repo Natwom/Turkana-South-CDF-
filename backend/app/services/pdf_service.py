@@ -1,5 +1,8 @@
+import logging
 import os
 from io import BytesIO
+from xml.sax.saxutils import escape
+
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.lib import colors
@@ -9,6 +12,8 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.utils import ImageReader
 from ..core.config import settings
 
+logger = logging.getLogger("pdf_service")
+
 styles = getSampleStyleSheet()
 
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "..", "assets", "ngcdf-logo.png")
@@ -17,10 +22,6 @@ letterhead_title = ParagraphStyle("LetterheadTitle", parent=styles["Normal"],
     fontSize=11, leading=14, fontName="Helvetica-Bold", alignment=TA_CENTER)
 letterhead_sub = ParagraphStyle("LetterheadSub", parent=styles["Normal"],
     fontSize=9, leading=12, alignment=TA_CENTER)
-
-def _row(label, value):
-    return [Paragraph(f"<b>{label}</b>", styles["Normal"]),
-            Paragraph(str(value or "—"), styles["Normal"])]
 
 DOC_TYPE_LABELS = {
     "id_card": "Copy of ID (student/parent)",
@@ -37,10 +38,36 @@ IMAGE_EXTENSIONS = {"jpg", "jpeg", "png"}
 MAX_IMG_WIDTH = 12 * cm
 MAX_IMG_HEIGHT = 9 * cm
 
+
+# ---------- safe helpers ----------
+def _esc(value):
+    """Escape text for use inside a ReportLab Paragraph (which parses markup)."""
+    if value is None or value == "":
+        return "—"
+    return escape(str(value))
+
+
+def _num(value):
+    """Convert to float safely (None / '' / bad strings become 0)."""
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _row(label, value):
+    return [Paragraph(f"<b>{escape(str(label))}</b>", styles["Normal"]),
+            Paragraph(_esc(value), styles["Normal"])]
+
+
 def _letterhead(S):
     logo_cell = ""
     if os.path.exists(LOGO_PATH):
-        logo_cell = Image(LOGO_PATH, width=2.2*cm, height=2.2*cm)
+        try:
+            logo_cell = Image(LOGO_PATH, width=2.2*cm, height=2.2*cm)
+        except Exception:
+            logger.exception("Could not load letterhead logo")
+            logo_cell = ""
     text_cell = [
         Paragraph("NATIONAL GOVERNMENT CONSTITUENCIES DEVELOPMENT FUND BOARD", letterhead_title),
         Paragraph("TURKANA SOUTH CONSTITUENCY", letterhead_title),
@@ -67,6 +94,7 @@ def _letterhead(S):
     S.append(line)
     S.append(Spacer(1, 10))
 
+
 def _scaled_image(path, max_w, max_h):
     """Return a ReportLab Image scaled to fit within max_w x max_h, preserving aspect ratio."""
     try:
@@ -83,38 +111,39 @@ def _scaled_image(path, max_w, max_h):
     except Exception:
         return None
 
-def generate_application_pdf(app) -> bytes:
-    buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.6*cm, rightMargin=1.6*cm,
-                            topMargin=1.4*cm, bottomMargin=1.6*cm)
+
+def _build_story(app, include_images=True):
     S = []
     a = app.applicant
+
+    def A(name):
+        return getattr(a, name, None) if a is not None else None
 
     _letterhead(S)
 
     S.append(Paragraph("BURSARY APPLICATION FORM", styles["Title"]))
     S.append(Spacer(1, 8))
-    S.append(Paragraph(f"Application Number: <b>{app.application_number}</b>   "
-                       f"Status: {app.status}", styles["Normal"]))
+    S.append(Paragraph(f"Application Number: <b>{_esc(app.application_number)}</b>   "
+                       f"Status: {_esc(app.status)}", styles["Normal"]))
     S.append(Spacer(1, 10))
 
     # PART A
     S.append(Paragraph("PART A: PERSONAL, INSTITUTIONAL AND OTHER DETAILS", styles["Heading3"]))
-    rows = [_row("Name of Student", a.full_name), _row("Registration/Admission No.", a.reg_number),
-            _row("ID Number", a.id_number), _row("NEMIS Number", a.nemis_number),
-            _row("Telephone", a.telephone), _row("Gender", a.gender),
-            _row("Date of Birth", a.dob), _row("Place of Birth/Residence", a.place_of_birth),
-            _row("Constituency", a.constituency), _row("Ward", a.ward),
-            _row("Location", a.location), _row("Sub-Location", a.sub_location),
-            _row("Village", a.village),
-            _row("Name of School/College/University", a.institution),
-            _row("Institution Code (Min. of Education)", a.institution_code),
-            _row("School Paybill Number", a.school_paybill),
-            _row("School Bank/M-Pesa Account Number", a.school_account_number),
-            _row("Campus/Branch", a.campus), _row("Level of Study", a.level_of_study),
-            _row("Course of Study", a.course), _row("Mode of Study", a.mode_of_study),
-            _row("Class/Year of Study", a.class_year),
-            _row("Expected Year & Month of Completion", a.expected_completion)]
+    rows = [_row("Name of Student", A("full_name")), _row("Registration/Admission No.", A("reg_number")),
+            _row("ID Number", A("id_number")), _row("NEMIS Number", A("nemis_number")),
+            _row("Telephone", A("telephone")), _row("Gender", A("gender")),
+            _row("Date of Birth", A("dob")), _row("Place of Birth/Residence", A("place_of_birth")),
+            _row("Constituency", A("constituency")), _row("Ward", A("ward")),
+            _row("Location", A("location")), _row("Sub-Location", A("sub_location")),
+            _row("Village", A("village")),
+            _row("Name of School/College/University", A("institution")),
+            _row("Institution Code (Min. of Education)", A("institution_code")),
+            _row("School Paybill Number", A("school_paybill")),
+            _row("School Bank/M-Pesa Account Number", A("school_account_number")),
+            _row("Campus/Branch", A("campus")), _row("Level of Study", A("level_of_study")),
+            _row("Course of Study", A("course")), _row("Mode of Study", A("mode_of_study")),
+            _row("Class/Year of Study", A("class_year")),
+            _row("Expected Year & Month of Completion", A("expected_completion"))]
     t = Table(rows, colWidths=[6*cm, 10*cm])
     t.setStyle(TableStyle([("GRID", (0,0), (-1,-1), 0.5, colors.grey),
                            ("VALIGN", (0,0), (-1,-1), "TOP"),
@@ -123,20 +152,22 @@ def generate_application_pdf(app) -> bytes:
 
     # PART B
     S.append(Paragraph("PART B: FAMILY BACKGROUND", styles["Heading3"]))
-    S.append(Paragraph(f"Family Status: <b>{app.family_status or ''}</b> {app.family_status_other or ''}", styles["Normal"]))
+    S.append(Paragraph(f"Family Status: <b>{escape(str(app.family_status or ''))}</b> "
+                       f"{escape(str(app.family_status_other or ''))}", styles["Normal"]))
     if app.family:
         for rel in ("father", "mother"):
-            g = getattr(app.family, rel)
+            g = getattr(app.family, rel, None)
             label = rel.capitalize() + "/Guardian"
             S.append(Spacer(1, 6))
             S.append(Paragraph(label, styles["Heading4"]))
             if g:
-                t = Table([_row("Name", g.name), _row("Occupation/Profession", g.occupation),
-                           _row("Main Source of Income", g.main_income_source),
-                           _row("Other Source of Income", g.other_income_source),
-                           _row("Employment Status", g.employment_status),
-                           _row("Retired", "Yes" if g.is_retired else "No"),
-                           _row("Telephone Contact", g.telephone)],
+                t = Table([_row("Name", getattr(g, "name", None)),
+                           _row("Occupation/Profession", getattr(g, "occupation", None)),
+                           _row("Main Source of Income", getattr(g, "main_income_source", None)),
+                           _row("Other Source of Income", getattr(g, "other_income_source", None)),
+                           _row("Employment Status", getattr(g, "employment_status", None)),
+                           _row("Retired", "Yes" if getattr(g, "is_retired", False) else "No"),
+                           _row("Telephone Contact", getattr(g, "telephone", None))],
                           colWidths=[6*cm, 10*cm])
                 t.setStyle(TableStyle([("GRID", (0,0), (-1,-1), 0.5, colors.grey),
                                        ("BACKGROUND", (0,0), (0,-1), colors.whitesmoke)]))
@@ -145,11 +176,12 @@ def generate_application_pdf(app) -> bytes:
         S.append(Spacer(1, 8))
         S.append(Paragraph("Siblings in School", styles["Heading4"]))
         data = [["Name", "Relationship", "School/Institution", "Class", "Total Fees", "Balance"]]
-        total, bal = 0, 0
+        total, bal = 0.0, 0.0
         for s in app.siblings:
-            data.append([s.name, s.relation_type or "", s.school or "", s.class_level or "",
-                         f"{s.total_fees:,.2f}", f"{s.outstanding_balance:,.2f}"])
-            total += float(s.total_fees or 0); bal += float(s.outstanding_balance or 0)
+            fees, balance = _num(s.total_fees), _num(s.outstanding_balance)
+            data.append([str(s.name or ""), str(s.relation_type or ""), str(s.school or ""),
+                         str(s.class_level or ""), f"{fees:,.2f}", f"{balance:,.2f}"])
+            total += fees; bal += balance
         data.append(["", "", "", "GRAND TOTAL", f"{total:,.2f}", f"{bal:,.2f}"])
         t = Table(data, repeatRows=1)
         t.setStyle(TableStyle([("GRID", (0,0), (-1,-1), 0.5, colors.grey),
@@ -162,30 +194,36 @@ def generate_application_pdf(app) -> bytes:
     S.append(Paragraph("PART C: ADDITIONAL INFORMATION", styles["Heading3"]))
     f = app.family
     if f:
-        S.append(Paragraph(f"Reason for applying for a bursary: {f.reason_for_bursary or '—'}", styles["Normal"]))
-        S.append(Paragraph(f"Physical impairment/disability: {'Yes — ' + (f.applicant_disability_desc or'') if f.applicant_disability else 'No'}", styles["Normal"]))
-        S.append(Paragraph(f"Other disability/chronic illness: {'Yes — ' + (f.chronic_illness_desc or '') if f.chronic_illness else 'No'}", styles["Normal"]))
-        S.append(Paragraph(f"Parent/Guardian disability: {'Yes — ' + (f.guardian_disability_desc or '') if f.guardian_disability else 'No'}", styles["Normal"]))
+        def yes_no(flag, desc):
+            return f"Yes — {escape(str(desc or ''))}" if flag else "No"
+        S.append(Paragraph(f"Reason for applying for a bursary: {_esc(f.reason_for_bursary)}", styles["Normal"]))
+        S.append(Paragraph("Physical impairment/disability: "
+                           + yes_no(f.applicant_disability, f.applicant_disability_desc), styles["Normal"]))
+        S.append(Paragraph("Other disability/chronic illness: "
+                           + yes_no(f.chronic_illness, f.chronic_illness_desc), styles["Normal"]))
+        S.append(Paragraph("Parent/Guardian disability: "
+                           + yes_no(f.guardian_disability, f.guardian_disability_desc), styles["Normal"]))
     S.append(Spacer(1, 12))
 
     # PART D
     S.append(Paragraph("PART D: EDUCATION FUNDING HISTORY", styles["Heading3"]))
     for h in app.funding_history:
-        S.append(Paragraph(f"{h.level}: Source — {h.funding_source or '—'}; Other — {h.other_source or '—'}", styles["Normal"]))
+        S.append(Paragraph(f"{_esc(h.level)}: Source — {_esc(h.funding_source)}; "
+                           f"Other — {_esc(h.other_source)}", styles["Normal"]))
     S.append(Spacer(1, 8))
-    S.append(Paragraph(f"AMOUNT APPLYING FOR: KSh {app.amount_requested or 0:,.2f}", styles["Heading4"]))
+    S.append(Paragraph(f"AMOUNT APPLYING FOR: KSh {_num(app.amount_requested):,.2f}", styles["Heading4"]))
     S.append(Spacer(1, 18))
 
     # PART E — DOCUMENTS SUBMITTED
     S.append(Paragraph("PART E: DOCUMENTS SUBMITTED", styles["Heading3"]))
     if app.documents:
-        # Summary table first, listing every document
         data = [["Document Type", "File Name", "Uploaded On"]]
         for d in app.documents:
-            label = DOC_TYPE_LABELS.get(d.doc_type, d.doc_type)
+            label = DOC_TYPE_LABELS.get(d.doc_type, d.doc_type or "")
             if d.is_signed_form:
                 label += " (SIGNED)"
-            data.append([label, d.original_name or "—", str(d.uploaded_at)[:16] if d.uploaded_at else "—"])
+            data.append([str(label), str(d.original_name or "—"),
+                         str(d.uploaded_at)[:16] if d.uploaded_at else "—"])
         t = Table(data, repeatRows=1, colWidths=[6*cm, 7*cm, 3.5*cm])
         t.setStyle(TableStyle([("GRID", (0,0), (-1,-1), 0.5, colors.grey),
                                ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
@@ -194,23 +232,30 @@ def generate_application_pdf(app) -> bytes:
         S.append(t)
         S.append(Spacer(1, 14))
 
-        # Then embed each image document as an actual picture
-        for d in app.documents:
-            ext = (d.file_type or "").lower().lstrip(".")
-            if ext not in IMAGE_EXTENSIONS:
-                continue
-            full_path = os.path.join(settings.STORAGE_DIR, d.file_path)
-            if not os.path.exists(full_path):
-                continue
-            label = DOC_TYPE_LABELS.get(d.doc_type, d.doc_type)
-            if d.is_signed_form:
-                label += " (SIGNED)"
-            img = _scaled_image(full_path, MAX_IMG_WIDTH, MAX_IMG_HEIGHT)
-            if img:
-                S.append(Paragraph(f"<b>{label}</b> — {d.original_name or ''}", styles["Normal"]))
-                S.append(Spacer(1, 4))
-                S.append(img)
-                S.append(Spacer(1, 14))
+        if include_images:
+            base = os.path.realpath(settings.STORAGE_DIR)
+            for d in app.documents:
+                ext = (d.file_type or "").lower().lstrip(".")
+                if ext not in IMAGE_EXTENSIONS:
+                    continue
+                full_path = os.path.realpath(os.path.join(base, d.file_path or ""))
+                try:
+                    if os.path.commonpath([base, full_path]) != base:
+                        continue
+                except ValueError:
+                    continue
+                if not os.path.isfile(full_path):
+                    continue
+                label = DOC_TYPE_LABELS.get(d.doc_type, d.doc_type or "")
+                if d.is_signed_form:
+                    label += " (SIGNED)"
+                img = _scaled_image(full_path, MAX_IMG_WIDTH, MAX_IMG_HEIGHT)
+                if img:
+                    S.append(Paragraph(f"<b>{escape(str(label))}</b> — {escape(str(d.original_name or ''))}",
+                                       styles["Normal"]))
+                    S.append(Spacer(1, 4))
+                    S.append(img)
+                    S.append(Spacer(1, 14))
     else:
         S.append(Paragraph("No documents have been uploaded yet.", styles["Normal"]))
     S.append(Spacer(1, 8))
@@ -246,7 +291,23 @@ def generate_application_pdf(app) -> bytes:
     t.setStyle(TableStyle([("GRID", (0,0), (-1,-1), 0.5, colors.grey),
                            ("BACKGROUND", (0,0), (0,-1), colors.whitesmoke)]))
     S.append(t)
+    return S
 
-    doc.build(S)
-    buf.seek(0)
-    return buf.read()
+
+def _render(app, include_images):
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.6*cm, rightMargin=1.6*cm,
+                            topMargin=1.4*cm, bottomMargin=1.6*cm)
+    doc.build(_build_story(app, include_images=include_images))
+    return buf.getvalue()
+
+
+def generate_application_pdf(app) -> bytes:
+    try:
+        return _render(app, include_images=True)
+    except Exception:
+        # A bad/corrupt uploaded image is the usual culprit — retry without embedded images
+        # so the admin can still download the PDF. The traceback is logged for debugging.
+        logger.exception("PDF build failed for %s; retrying without embedded images",
+                         getattr(app, "application_number", "?"))
+        return _render(app, include_images=False)

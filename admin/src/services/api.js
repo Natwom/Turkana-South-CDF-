@@ -18,9 +18,45 @@ api.interceptors.response.use(r => r, err => {
   return Promise.reject(err)
 })
 
+// With responseType 'blob', error bodies also arrive as a Blob. Convert them back
+// into { detail: '...' } so callers can show the real reason.
+const readBlobError = async (err) => {
+  const res = err.response
+  if (!res) {
+    err.response = { data: { detail: 'Cannot reach the server. Check your connection.' } }
+    return err
+  }
+  if (res.data instanceof Blob) {
+    let detail = ''
+    try {
+      const text = await res.data.text()
+      try {
+        const parsed = JSON.parse(text)
+        detail = typeof parsed.detail === 'string' ? parsed.detail : JSON.stringify(parsed.detail)
+      } catch {
+        detail = text.slice(0, 200)
+      }
+    } catch { /* ignore */ }
+    res.data = { detail: `${detail || 'Server error'} (HTTP ${res.status})` }
+  }
+  return err
+}
+
 export const downloadFile = async (path, filename) => {
-  const res = await api.get(path, { responseType: 'blob' })
-  const url = window.URL.createObjectURL(new Blob([res.data]))
+  let res
+  try {
+    res = await api.get(path, { responseType: 'blob' })
+  } catch (err) {
+    throw await readBlobError(err)
+  }
+
+  if (!res.data || res.data.size === 0) {
+    const err = new Error('Empty file received from server.')
+    err.response = { data: { detail: 'Empty file received from server.' } }
+    throw err
+  }
+
+  const url = window.URL.createObjectURL(new Blob([res.data], { type: res.data.type }))
   const link = document.createElement('a')
   link.href = url
   link.setAttribute('download', filename || 'download')
