@@ -27,6 +27,8 @@ export default function ApplicationDetail() {
   const [deleting, setDeleting] = useState(false)
   // Tracks which downloads are in progress, keyed by 'pdf' or 'doc-<id>'
   const [downloading, setDownloading] = useState({})
+  // Tracks completed downloads (so the button can show "Downloaded" afterwards)
+  const [downloaded, setDownloaded] = useState({})
 
   const load = () => api.get(`/admin/applications/${id}`).then(r => setApp(r.data))
   useEffect(() => { load() }, [id])
@@ -38,8 +40,11 @@ export default function ApplicationDetail() {
   const handleDownload = async (key, url, filename) => {
     if (downloading[key]) return
     setDownloading(prev => ({ ...prev, [key]: true }))
+    setDownloaded(prev => ({ ...prev, [key]: false }))
     try {
       await downloadFile(url, filename)
+      setDownloaded(prev => ({ ...prev, [key]: true }))
+      setMsg(`✅ Downloaded: ${filename}`)
     } catch (e) {
       setMsg(e.response?.data?.detail || 'Download failed')
     } finally {
@@ -155,7 +160,7 @@ export default function ApplicationDetail() {
                   disabled={busy}
                   onClick={() => handleDownload(key, `/documents/${d.id}`, d.original_name)}
                 >
-                  {busy ? <><Spinner />Downloading…</> : 'Download'}
+                  {busy ? <><Spinner />Downloading…</> : downloaded[key] ? '✓ Downloaded' : 'Download'}
                 </button>
               </div>
             )
@@ -165,7 +170,7 @@ export default function ApplicationDetail() {
             disabled={!!downloading.pdf}
             onClick={() => handleDownload('pdf', `/admin/applications/${id}/pdf`, `${app.application_number}.pdf`)}
           >
-            {downloading.pdf ? <><Spinner />Downloading…</> : 'Download Generated PDF'}
+            {downloading.pdf ? <><Spinner />Downloading…</> : downloaded.pdf ? `✓ Downloaded ${app.application_number}.pdf` : 'Download Generated PDF'}
           </button>
         </>)}
 
