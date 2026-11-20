@@ -56,7 +56,7 @@ export default function Dashboard() {
     setRefreshing(true)
     Promise.all([
       api.get('/admin/dashboard'),
-      api.get('/admin/applications', { params: { sort: 'newest', size: 6, page: 1 } })
+      api.get('/admin/applications', { params: { sort: 'newest', size: 6, page: 1, compact: true } })
     ]).then(([dashRes, appsRes]) => {
       setD(dashRes.data)
       setRecent(appsRes.data.items || [])
