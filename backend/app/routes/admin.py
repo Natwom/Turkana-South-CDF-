@@ -8,7 +8,8 @@ from sqlalchemy import func, or_
 from fastapi.responses import Response
 from ..database import get_db
 from ..core.config import settings
-from ..core.security import (verify_password, create_token, get_current_admin, require_roles, hash_password)
+from ..core.security import (verify_password, create_token, get_current_admin, require_roles,
+                             hash_password, COOKIE_NAME)
 from ..schemas.admin import (AdminLogin, StatusUpdate, CorrectionRequestIn,
                              VerificationIn, AllocationIn, DisburseIn, NoteIn)
 from ..models.user import User
@@ -25,7 +26,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 # ---------- AUTH ----------
 @router.post("/login")
-def login(payload: AdminLogin, db: Session = Depends(get_db)):
+def login(payload: AdminLogin, response: Response, db: Session = Depends(get_db)):
     user = db.query(User).filter(or_(User.username == payload.username,
                                      User.email == payload.username)).first()
     if not user or not verify_password(payload.password, user.password_hash):
@@ -35,8 +36,19 @@ def login(payload: AdminLogin, db: Session = Depends(get_db)):
     user.last_login = datetime.now(timezone.utc)
     db.commit()
     log_action(user.username, "Admin login")
-    return {"access_token": create_token({"sub": str(user.id), "role": user.role}),
-            "token_type": "bearer", "role": user.role, "full_name": user.full_name}
+    token = create_token({"sub": str(user.id), "role": user.role})
+    # The session lives in an httpOnly cookie: JavaScript on the page can never read the token.
+    response.set_cookie(key=COOKIE_NAME, value=token,
+                        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+                        httponly=True, secure=settings.COOKIE_SECURE,
+                        samesite=settings.COOKIE_SAMESITE, path="/")
+    return {"role": user.role, "full_name": user.full_name}
+
+@router.post("/logout")
+def logout(response: Response):
+    response.delete_cookie(key=COOKIE_NAME, path="/", httponly=True,
+                           secure=settings.COOKIE_SECURE, samesite=settings.COOKIE_SAMESITE)
+    return {"message": "Logged out."}
 
 @router.get("/me")
 def me(admin=Depends(get_current_admin)):
